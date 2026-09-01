@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { runAutonomousRepairLoop } from "../src/autonomous-repair.mjs";
 
-function makeRegistry({ verificationResults, toolCalls = [] }) {
+function makeRegistry({ verificationResults }) {
   let verificationIndex = 0;
   const executed = [];
   return {
@@ -39,20 +39,23 @@ function makeRouter() {
   let calls = 0;
   return {
     get calls() { return calls; },
-    async chat(request) {
+    async chat() {
       calls += 1;
       if (calls === 1) {
         return { content: "Implemented initial change.", toolCalls: [], model: "test-model" };
       }
-      return {
-        content: "Repair complete.",
-        toolCalls: [{
-          id: `repair-${calls}`,
-          type: "function",
-          function: { name: "test.echo", arguments: JSON.stringify({ value: "repair" }) }
-        }],
-        model: "test-model"
-      };
+      if (calls === 2) {
+        return {
+          content: "",
+          toolCalls: [{
+            id: "repair-2",
+            type: "function",
+            function: { name: "test.echo", arguments: JSON.stringify({ value: "repair" }) }
+          }],
+          model: "test-model"
+        };
+      }
+      return { content: "Repair complete.", toolCalls: [], model: "test-model" };
     }
   };
 }
@@ -91,7 +94,7 @@ test("autonomous repair loop retries after verification failure and stops after 
   assert.equal(result.status, "repaired");
   assert.equal(result.repairAttempts.length, 1);
   assert.equal(result.repairAttempts[0].verification.passed, true);
-  assert.equal(router.calls, 2);
+  assert.equal(router.calls, 3);
 });
 
 test("autonomous repair loop reports failed after exhausting its repair budget", async () => {
