@@ -3,7 +3,7 @@ import { runCommand } from "@pinaka/tools";
 
 const BRANCH_PATTERN = /^(?![./-])(?!.*(?:\.\.|\\|\s|~|\^|:|\?|\*|\[|@\{|\.lock$))[A-Za-z0-9._/-]{1,240}$/;
 const GITHUB_HTTPS_REPO = /^https:\/\/github\.com\/[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+(?:\.git)?\/?$/i;
-const MAX_CLONE_OUTPUT_BYTES = 512 * 1024;
+const MAX_COMMAND_OUTPUT_BYTES = 512 * 1024;
 
 function validateBranchName(branchName) {
   if (typeof branchName !== "string" || !BRANCH_PATTERN.test(branchName)) {
@@ -23,17 +23,19 @@ function validateRepositoryUrl(repositoryUrl) {
 }
 
 function requireSuccess(result, operation) {
+  if (result.timedOut) {
+    throw new GitOperationError(`${operation} timed out`, "GIT_COMMAND_TIMEOUT", {
+      stdout: result.stdout,
+      stderr: result.stderr
+    });
+  }
   if (result.exitCode !== 0) {
     throw new GitOperationError(`${operation} failed`, "GIT_COMMAND_FAILED", {
       exitCode: result.exitCode,
       signal: result.signal,
       stdout: result.stdout,
-      stderr: result.stderr,
-      timedOut: result.timedOut
+      stderr: result.stderr
     });
-  }
-  if (result.timedOut) {
-    throw new GitOperationError(`${operation} timed out`, "GIT_COMMAND_TIMEOUT");
   }
   return result;
 }
@@ -72,7 +74,7 @@ export class GitRepository {
       workspaceRoot: this.#workspaceRoot,
       executable: "git",
       args: ["status", "--porcelain=v1", "--branch"],
-      maxOutputBytes: MAX_CLONE_OUTPUT_BYTES
+      maxOutputBytes: MAX_COMMAND_OUTPUT_BYTES
     });
     requireSuccess(result, "git status");
     return parseStatus(result.stdout);
@@ -90,11 +92,14 @@ export class GitRepository {
   }
 
   async clone(repositoryUrl) {
-    validateRepositoryUrl(repositoryUrl);
-    const status = await this.status().catch((error) => {
-      if (error?.code === "GIT_COMMAND_FAILED") return null;
-      throw error;
-    });
+    const source = validateRepositoryUrl(repositoryUrl);
+    let status;
+    try {
+      status = await this.status();
+    } catch (error) {
+      if (error?.code !== "GIT_COMMAND_FAILED") throw error;
+      status = null;
+    }
 
     if (status !== null) {
       throw new GitOperationError("workspace already contains a Git repository", "WORKSPACE_NOT_EMPTY");
@@ -103,9 +108,9 @@ export class GitRepository {
     const result = await runCommand({
       workspaceRoot: this.#workspaceRoot,
       executable: "git",
-      args: ["clone", "--no-recurse-submodules", "--depth", "1", repositoryUrl, "."],
+      args: ["clone", "--no-recurse-submodules", "--depth", "1", source, "."],
       timeoutMs: 120_000,
-      maxOutputBytes: MAX_CLONE_OUTPUT_BYTES
+      maxOutputBytes: MAX_COMMAND_OUTPUT_BYTES
     });
     requireSuccess(result, "git clone");
 
