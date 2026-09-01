@@ -82,25 +82,32 @@ function streamTaskEvents(res, taskId) {
   });
   res.flushHeaders?.();
   res.write(": connected\n\n");
+
   for (const event of history) writeSse(res, event);
+  const lastEvent = history.at(-1);
+  if (lastEvent && ["completed", "needs_attention", "failed"].includes(lastEvent.status)) {
+    res.end();
+    return;
+  }
 
   let closed = false;
+  let heartbeat = null;
   const unsubscribe = taskRunner.subscribe(taskId, (event) => {
     if (closed) return;
     writeSse(res, event);
     if (["completed", "needs_attention", "failed"].includes(event.status)) {
       closed = true;
-      clearInterval(heartbeat);
+      if (heartbeat) clearInterval(heartbeat);
       unsubscribe();
       res.end();
     }
   });
-  const heartbeat = setInterval(() => {
+  heartbeat = setInterval(() => {
     if (!closed) res.write(": heartbeat\n\n");
   }, 15_000);
   res.on("close", () => {
     closed = true;
-    clearInterval(heartbeat);
+    if (heartbeat) clearInterval(heartbeat);
     unsubscribe();
   });
 }
