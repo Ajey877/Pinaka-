@@ -16,7 +16,7 @@ Understand -> Inspect -> Plan -> Implement -> Test -> Diagnose -> Fix -> Review
                                                          Verify
 ```
 
-## Initial components
+## Components
 
 ### Web application
 Browser interface for submitting tasks, selecting repositories, viewing agent progress, reviewing proposed changes, and inspecting results.
@@ -27,8 +27,11 @@ Orchestrates the agent loop, maintains execution state, applies safety policies,
 ### Model router
 Keeps the AI provider behind a replaceable interface so the project is not locked to one model or vendor.
 
+### Workspace manager
+Creates an isolated filesystem workspace for each agent task. Workspace identifiers are validated, workspace paths are derived from a controlled root, concurrent creation for the same task is rejected, and completed workspaces can be released or discarded.
+
 ### Tools
-The agent will eventually use controlled tools for:
+The agent will use controlled tools for:
 
 - reading and writing files
 - repository search
