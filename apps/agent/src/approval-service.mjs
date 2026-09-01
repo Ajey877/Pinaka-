@@ -15,37 +15,29 @@ function validateJob(job) {
   if (job.task.length > MAX_TASK_CHARS) throw Object.assign(new Error("task is too large for approval"), { code: "INVALID_JOB" });
   return job;
 }
-
 function normalizeDiff(job) {
   const diff = job.result?.diff;
   if (!diff || typeof diff.text !== "string" || diff.text.length === 0) throw Object.assign(new Error("no retained diff is available for approval"), { code: "NO_DIFF" });
   if (diff.text.length > MAX_DIFF_CHARS || diff.truncated === true) throw Object.assign(new Error("retained diff is truncated and cannot be approved"), { code: "DIFF_TRUNCATED" });
   return diff.text;
 }
-
 function makeCommitMessage(task) {
   const compact = task.replace(/\s+/g, " ").trim().replace(/[\r\n]/g, " ");
   const suffix = " [Pinaka]";
   return `${compact.slice(0, Math.max(1, COMMIT_MESSAGE_LIMIT - suffix.length))}${suffix}`;
 }
-
 function makePrTitle(task) {
   const compact = task.replace(/\s+/g, " ").trim().replace(/[\r\n]/g, " ");
   return `Pinaka: ${compact}`.slice(0, 256);
 }
-
 function makePrBody(job, commit) {
   const summary = job.result?.finalReview?.summary || job.result?.review?.summary || "Verified and approved by the Pinaka review pipeline.";
   return [
-    "## Pinaka change",
-    "",
-    summary.slice(0, 4_000),
-    "",
+    "## Pinaka change", "", summary.slice(0, 4_000), "",
     `- Task: ${job.task.replace(/\s+/g, " ").trim().slice(0, 2_000)}`,
     `- Commit: ${commit.slice(0, 40)}`,
     "- Verification and final review passed before approval.",
-    "- Changes were applied to a fresh clone and pushed to an isolated agent branch.",
-    ""
+    "- Changes were applied to a fresh clone and pushed to an isolated agent branch.", ""
   ].join("\n").slice(0, 10_000);
 }
 
@@ -53,10 +45,12 @@ export class ApprovalService {
   #workspaceManager;
   #decisions = new Map();
   #githubPrClient;
+  #githubToken;
 
-  constructor({ workspaceRoot, workspaceManager, githubToken, githubPrClient } = {}) {
+  constructor({ workspaceRoot, workspaceManager, githubToken = "", githubPrClient } = {}) {
     this.#workspaceManager = workspaceManager || new WorkspaceManager({ rootDirectory: workspaceRoot });
-    this.#githubPrClient = githubPrClient || new GitHubPullRequestClient({ token: githubToken });
+    this.#githubToken = typeof githubToken === "string" ? githubToken.trim() : "";
+    this.#githubPrClient = githubPrClient || new GitHubPullRequestClient({ token: this.#githubToken });
   }
 
   decorate(job) {
@@ -77,6 +71,8 @@ export class ApprovalService {
       this.#decisions.set(job.id, decision);
       return { ...job, status: decision.status, approval: decision };
     }
+
+    if (!this.#githubToken) throw Object.assign(new Error("GITHUB_TOKEN is required to publish an approved pull request"), { code: "GITHUB_TOKEN_REQUIRED", statusCode: 503 });
 
     const diff = normalizeDiff(job);
     const workspace = await this.#workspaceManager.create(`approval-${job.id}`);
@@ -105,7 +101,15 @@ export class ApprovalService {
       if (head.exitCode !== 0) throw Object.assign(new Error("approved commit could not be read"), { code: "APPROVAL_HEAD_FAILED" });
       const commitSha = head.stdout.trim();
 
-      const push = await run(["push", "--set-upstream", "origin", branch], { timeoutMs: 120_000, maxOutputBytes: 128 * 1024 });
+      const push = await run(["push", "--set-upstream", "origin", branch], {
+        timeoutMs: 120_000,
+        maxOutputBytes: 128 * 1024,
+        environment: {
+          GIT_CONFIG_COUNT: "1",
+          GIT_CONFIG_KEY_0: "http.extraHeader",
+          GIT_CONFIG_VALUE_0: `Authorization: Bearer ${this.#githubToken}`
+        }
+      });
       if (push.exitCode !== 0 || push.timedOut) throw Object.assign(new Error("approved branch could not be pushed to GitHub"), { code: "APPROVAL_PUSH_FAILED" });
 
       const pullRequest = await this.#githubPrClient.createPullRequest({
