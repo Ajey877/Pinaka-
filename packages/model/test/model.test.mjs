@@ -36,6 +36,7 @@ test("OpenAICompatibleProvider sends a normalized chat request", async () => {
   });
 
   assert.equal(result.content, "hello");
+  assert.deepEqual(result.toolCalls, []);
   assert.equal(request.url, "https://example.com/v1/chat/completions");
   assert.equal(request.options.method, "POST");
   assert.equal(request.options.headers.authorization, "Bearer test-key");
@@ -48,6 +49,47 @@ test("OpenAICompatibleProvider sends a normalized chat request", async () => {
     max_tokens: 100,
     temperature: 0
   });
+});
+
+test("OpenAICompatibleProvider preserves tool calls and sends tool definitions", async () => {
+  let request;
+  const provider = new OpenAICompatibleProvider({
+    baseUrl: "https://example.com/v1",
+    model: "tool-model",
+    fetchImpl: async (_url, options) => {
+      request = JSON.parse(options.body);
+      return jsonResponse({
+        id: "resp-tool",
+        choices: [{ message: {
+          content: null,
+          tool_calls: [{ id: "call-1", type: "function", function: { name: "files.read", arguments: "{\"path\":\"README.md\"}" } }]
+        } }]
+      });
+    }
+  });
+
+  const tools = [{
+    type: "function",
+    function: {
+      name: "files.read",
+      description: "Read a file.",
+      parameters: { type: "object", properties: { path: { type: "string" } }, required: ["path"] }
+    }
+  }];
+  const result = await provider.chat({
+    messages: [{ role: "user", content: "Read the README." }],
+    tools,
+    toolChoice: "auto"
+  });
+
+  assert.equal(result.content, "");
+  assert.deepEqual(result.toolCalls, [{
+    id: "call-1",
+    type: "function",
+    function: { name: "files.read", arguments: "{\"path\":\"README.md\"}" }
+  }]);
+  assert.deepEqual(request.tools, tools);
+  assert.equal(request.tool_choice, "auto");
 });
 
 test("provider never requires an API key for local or public endpoints", async () => {
