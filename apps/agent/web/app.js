@@ -10,6 +10,9 @@ let planResult = document.querySelector("#planResult");
 const planCount = document.querySelector("#planCount");
 const toolCount = document.querySelector("#toolCount");
 const toolList = document.querySelector("#toolList");
+const diffViewer = document.querySelector("#diffViewer");
+const diffSummary = document.querySelector("#diffSummary");
+const reviewSummary = document.querySelector("#reviewSummary");
 
 const savedTheme = localStorage.getItem("pinaka-theme");
 if (savedTheme === "dark" || (!savedTheme && matchMedia("(prefers-color-scheme: dark)").matches)) {
@@ -163,6 +166,77 @@ function renderTaskResult(job) {
       review.verdict?.summary || review.summary || "Review completed",
       accepted ? "✓" : "!"
     );
+    reviewSummary.textContent = accepted ? "Review approved" : "Review rejected";
+  }
+
+  renderDiff(result.diff, review);
+}
+
+function renderDiff(diff, review) {
+  diffViewer.replaceChildren();
+  if (!diff || typeof diff.text !== "string" || diff.text.trim() === "") {
+    diffSummary.textContent = "No changes yet";
+    const empty = document.createElement("div");
+    empty.className = "empty-state diff-empty";
+    const icon = document.createElement("div");
+    const strong = document.createElement("strong");
+    const span = document.createElement("span");
+    icon.className = "empty-icon";
+    icon.textContent = "⌘";
+    strong.textContent = "No diff to review";
+    span.textContent = "No working-tree changes were retained for this task.";
+    empty.append(icon, strong, span);
+    diffViewer.appendChild(empty);
+    return;
+  }
+
+  const rawLines = diff.text.split(/\r?\n/);
+  const scroll = document.createElement("div");
+  scroll.className = "diff-scroll";
+  let additions = 0;
+  let deletions = 0;
+
+  rawLines.forEach((line, index) => {
+    const row = document.createElement("div");
+    const number = document.createElement("div");
+    const code = document.createElement("div");
+    row.className = "diff-line";
+    number.className = "diff-number";
+    code.className = "diff-code";
+    number.textContent = String(index + 1);
+    code.textContent = line || " ";
+
+    if (line.startsWith("+++") || line.startsWith("---") || line.startsWith("diff --git") || line.startsWith("index ")) {
+      row.classList.add("meta");
+    } else if (line.startsWith("@@")) {
+      row.classList.add("hunk");
+    } else if (line.startsWith("+")) {
+      row.classList.add("add");
+      additions += 1;
+    } else if (line.startsWith("-")) {
+      row.classList.add("del");
+      deletions += 1;
+    }
+
+    row.append(number, code);
+    scroll.appendChild(row);
+  });
+
+  const toolbar = document.createElement("div");
+  toolbar.className = "diff-toolbar";
+  const title = document.createElement("strong");
+  const count = document.createElement("span");
+  title.textContent = "Working-tree diff";
+  count.textContent = `${additions} additions · ${deletions} deletions`;
+  toolbar.append(title, count);
+  diffViewer.append(toolbar, scroll);
+  diffSummary.textContent = `${additions} additions · ${deletions} deletions`;
+
+  if (diff.truncated) {
+    const warning = document.createElement("p");
+    warning.className = "diff-truncated";
+    warning.textContent = "Diff truncated to Pinaka's safe review size.";
+    diffViewer.appendChild(warning);
   }
 }
 
@@ -339,6 +413,8 @@ planButton.addEventListener("click", async () => {
 
   planButton.disabled = true;
   formMessage.textContent = "Preparing Pinaka…";
+  diffSummary.textContent = "Collecting changes…";
+  reviewSummary.textContent = "Awaiting review";
   addActivity("Starting task", repository, "↗");
 
   try {
