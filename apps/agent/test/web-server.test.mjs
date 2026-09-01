@@ -18,7 +18,7 @@ test("web server exposes only the known browser assets", async () => {
 
   const approval = await readWebAsset("/approval-ui.js");
   assert.equal(approval.contentType, "text/javascript; charset=utf-8");
-  assert.match(approval.content.toString("utf8"), /Approve & commit/);
+  assert.match(approval.content.toString("utf8"), /Approve & create PR/);
 });
 
 test("web server rejects arbitrary or traversal asset paths", async () => {
