@@ -8,6 +8,7 @@ import { GitHubPullRequestClient } from "./github-pr-client.mjs";
 const MAX_DIFF_CHARS = 120_000;
 const MAX_TASK_CHARS = 20_000;
 const COMMIT_MESSAGE_LIMIT = 120;
+
 function validateJob(job) {
   if (!job || typeof job !== "object") throw Object.assign(new Error("job is required"), { code: "INVALID_JOB" });
   if (typeof job.id !== "string" || typeof job.repositoryUrl !== "string" || typeof job.task !== "string") throw Object.assign(new Error("job is missing approval fields"), { code: "INVALID_JOB" });
@@ -20,43 +21,44 @@ function normalizeDiff(job) {
   if (diff.text.length > MAX_DIFF_CHARS || diff.truncated === true) throw Object.assign(new Error("retained diff is truncated and cannot be approved"), { code: "DIFF_TRUNCATED" });
   return diff.text;
 }
-function makeCommitMessage(task) {
-  const compact = task.replace(/\s+/g, " ").trim().replace(/[\r\n]/g, " ");
-  const suffix = " [Pinaka]";
-  return `${compact.slice(0, Math.max(1, COMMIT_MESSAGE_LIMIT - suffix.length))}${suffix}`;
-}
+function makeCommitMessage(task) { const compact = task.replace(/\s+/g, " ").trim().replace(/[\r\n]/g, " "); const suffix = " [Pinaka]"; return `${compact.slice(0, Math.max(1, COMMIT_MESSAGE_LIMIT - suffix.length))}${suffix}`; }
 function makePrTitle(task) { return `Pinaka: ${task.replace(/\s+/g, " ").trim()}`.slice(0, 256); }
 function makePrBody(job, commit) {
   const summary = job.result?.finalReview?.summary || job.result?.review?.summary || "Verified and approved by the Pinaka review pipeline.";
   return ["## Pinaka change", "", summary.slice(0, 4_000), "", `- Task: ${job.task.replace(/\s+/g, " ").trim().slice(0, 2_000)}`, `- Commit: ${commit.slice(0, 40)}`, "- Verification and final review passed before approval.", "- Changes were applied to a fresh clone and pushed to an isolated agent branch.", ""].join("\n").slice(0, 10_000);
 }
-function gitAuthEnvironment(githubToken) {
-  return { GIT_TERMINAL_PROMPT: "0", GIT_CONFIG_COUNT: "1", GIT_CONFIG_KEY_0: "http.extraHeader", GIT_CONFIG_VALUE_0: `Authorization: Bearer ${githubToken}` };
-}
+function gitAuthEnvironment(token) { return { GIT_TERMINAL_PROMPT: "0", GIT_CONFIG_COUNT: "1", GIT_CONFIG_KEY_0: "http.extraHeader", GIT_CONFIG_VALUE_0: `Authorization: Bearer ${token}` }; }
+
 export class ApprovalService {
-  #workspaceManager; #decisions = new Map(); #githubPrClient; #githubToken;
-  constructor({ workspaceRoot, workspaceManager, githubToken = "", githubPrClient } = {}) {
+  #workspaceManager;
+  #decisions = new Map();
+  #githubPrClientFactory;
+
+  constructor({ workspaceRoot, workspaceManager, githubPrClientFactory } = {}) {
     this.#workspaceManager = workspaceManager || new WorkspaceManager({ rootDirectory: workspaceRoot });
-    this.#githubToken = typeof githubToken === "string" ? githubToken.trim() : "";
-    this.#githubPrClient = githubPrClient || null;
+    this.#githubPrClientFactory = githubPrClientFactory || ((token) => new GitHubPullRequestClient({ token }));
   }
+
   decorate(job) {
-    validateJob(job); const decision = this.#decisions.get(job.id);
+    validateJob(job);
+    const decision = this.#decisions.get(job.id);
     if (decision) return { ...job, approval: { ...decision } };
     if (canDecideApproval(job, "approve")) return { ...job, approval: { status: "pending", actions: ["approve", "reject"] } };
     return { ...job, approval: null };
   }
+
   async decide(job, approval, { githubToken = "" } = {}) {
     validateJob(job);
     if (!canDecideApproval(job, approval)) throw Object.assign(new Error("task is not awaiting a valid approval decision"), { code: "APPROVAL_NOT_ALLOWED", statusCode: 409 });
     if (this.#decisions.has(job.id)) throw Object.assign(new Error("approval decision already recorded"), { code: "APPROVAL_ALREADY_DECIDED", statusCode: 409 });
     if (approval === "reject") {
       const decision = { status: nextApprovalStatus(approval), decidedAt: new Date().toISOString(), published: false };
-      this.#decisions.set(job.id, decision); return { ...job, status: decision.status, approval: decision };
+      this.#decisions.set(job.id, decision);
+      return { ...job, status: decision.status, approval: decision };
     }
-    const token = typeof githubToken === "string" && githubToken.trim() ? githubToken.trim() : this.#githubToken;
-    if (!token) throw Object.assign(new Error("GitHub sign-in is required to publish an approved pull request"), { code: "GITHUB_AUTH_REQUIRED", statusCode: 401 });
-    const prClient = this.#githubPrClient || new GitHubPullRequestClient({ token });
+    if (typeof githubToken !== "string" || githubToken.trim() === "") throw Object.assign(new Error("GitHub sign-in is required to publish an approved pull request"), { code: "GITHUB_AUTH_REQUIRED", statusCode: 401 });
+    const token = githubToken.trim();
+    const prClient = this.#githubPrClientFactory(token);
     const diff = normalizeDiff(job);
     const workspace = await this.#workspaceManager.create(`approval-${job.id}`);
     try {
@@ -85,10 +87,12 @@ export class ApprovalService {
       if (push.exitCode !== 0 || push.timedOut) throw Object.assign(new Error("approved branch could not be pushed to GitHub"), { code: "APPROVAL_PUSH_FAILED" });
       const pullRequest = await prClient.createPullRequest({ repositoryUrl: job.repositoryUrl, headBranch: branch, title: makePrTitle(job.task), body: makePrBody(job, commitSha), draft: false });
       const decision = { status: nextApprovalStatus(approval), decidedAt: new Date().toISOString(), published: true, branch, commit: commitSha, pullRequest };
-      this.#decisions.set(job.id, decision); return { ...job, status: decision.status, approval: decision };
+      this.#decisions.set(job.id, decision);
+      return { ...job, status: decision.status, approval: decision };
     } finally {
       try { await this.#workspaceManager.release(`approval-${job.id}`); } catch { try { await this.#workspaceManager.discard(`approval-${job.id}`); } catch {} }
     }
   }
 }
+
 export const __test = Object.freeze({ makeCommitMessage, makePrTitle, makePrBody, normalizeDiff, gitAuthEnvironment });
