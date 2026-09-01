@@ -98,6 +98,40 @@ test("tool registry validates registration and execution", async () => {
   assert.throws(() => registry.get("missing"), /unknown tool/);
 });
 
+test("tool registry emits safe start and finish events", async () => {
+  const events = [];
+  const registry = new ToolRegistry({ onEvent: (event) => events.push(event) });
+  registry.register("files.read", { run: async () => ({ secret: "hidden", ok: true }) });
+
+  await registry.execute("files.read", { secret: "do not emit" });
+
+  assert.equal(events.length, 2);
+  assert.equal(events[0].type, "tool.start");
+  assert.equal(events[0].tool, "files.read");
+  assert.equal(events[1].type, "tool.finish");
+  assert.equal(events[1].ok, true);
+  assert.equal(events[1].result.type, "object");
+  assert.deepEqual(events[1].result.keys, ["secret", "ok"]);
+  assert.equal(Object.prototype.hasOwnProperty.call(events[0], "input"), false);
+  assert.equal(Object.prototype.hasOwnProperty.call(events[1], "output"), false);
+});
+
+test("tool registry emits a bounded error event for failed execution", async () => {
+  const events = [];
+  const registry = new ToolRegistry({ onEvent: (event) => events.push(event) });
+  registry.register("files.read", {
+    run: async () => { throw Object.assign(new Error("boom"), { code: "BOOM" }); }
+  });
+
+  await assert.rejects(() => registry.execute("files.read", {}));
+
+  assert.equal(events.length, 2);
+  assert.equal(events[1].type, "tool.finish");
+  assert.equal(events[1].ok, false);
+  assert.equal(events[1].errorCode, "BOOM");
+  assert.equal(Object.prototype.hasOwnProperty.call(events[1], "error"), false);
+});
+
 test("GitHub client validates repository and content paths", async () => {
   const client = new GitHubClient({ apiBase: "https://api.github.com", token: "test-token" });
   assert.equal(client.apiBase, "https://api.github.com");
