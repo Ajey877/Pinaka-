@@ -47,6 +47,22 @@ test("rejects invalid and duplicate task ids", async () => {
   });
 });
 
+test("rejects concurrent creation for the same task", async () => {
+  const root = await makeRoot();
+  const manager = new WorkspaceManager({ rootDirectory: root });
+  const results = await Promise.allSettled([
+    manager.create("same-task"),
+    manager.create("same-task")
+  ]);
+
+  assert.equal(results.filter((result) => result.status === "fulfilled").length, 1);
+  assert.equal(results.filter((result) => result.status === "rejected").length, 1);
+  const rejected = results.find((result) => result.status === "rejected");
+  assert.ok(rejected.reason instanceof WorkspaceError);
+  assert.equal(rejected.reason.code, "WORKSPACE_EXISTS");
+  assert.equal(manager.list().length, 1);
+});
+
 test("release removes the workspace and makes it unavailable", async () => {
   const root = await makeRoot();
   const manager = new WorkspaceManager({ rootDirectory: root });
@@ -63,7 +79,7 @@ test("release removes the workspace and makes it unavailable", async () => {
   });
 });
 
-test("discard is idempotent for filesystem cleanup", async () => {
+test("discard removes workspace contents", async () => {
   const root = await makeRoot();
   const manager = new WorkspaceManager({ rootDirectory: root });
   const workspace = await manager.create("discard-me");
@@ -77,7 +93,7 @@ test("discard is idempotent for filesystem cleanup", async () => {
 test("list returns active workspaces only", async () => {
   const root = await makeRoot();
   const manager = new WorkspaceManager({ rootDirectory: root });
-  const one = await manager.create("one");
+  await manager.create("one");
   await manager.create("two");
   await manager.release("one");
 
