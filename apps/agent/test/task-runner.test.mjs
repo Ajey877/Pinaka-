@@ -56,7 +56,7 @@ test("task runner executes the workspace lifecycle and returns completion status
     workspaceManager,
     routerFactory: () => ({ chat: async () => ({}) }),
     gitFactory: ({ workspaceRoot }) => ({
-      async clone(url) { events.push(["clone", workspaceRoot, url]); },
+      async clone(url, options) { events.push(["clone", workspaceRoot, url, options]); },
       async createBranch(name) { events.push(["branch", name]); },
       async diff() { return { text: "", truncated: false }; }
     }),
@@ -64,7 +64,8 @@ test("task runner executes the workspace lifecycle and returns completion status
     agentRunner: async ({ task, registry }) => {
       events.push(["agent", task, registry.workspaceRoot]);
       return { status: "passed", verification: { passed: true } };
-    }
+    },
+    githubToken: "private-token"
   });
 
   const created = await runner.start({
@@ -77,8 +78,11 @@ test("task runner executes the workspace lifecycle and returns completion status
   const current = await waitForStatus(runner, "task-123", "completed");
   assert.equal(current.result.status, "passed");
 
-  assert.deepEqual(events, [
-    ["clone", "/tmp/task-123", "https://github.com/example/repo"],
+  assert.equal(events[0][0], "clone");
+  assert.equal(events[0][1], "/tmp/task-123");
+  assert.equal(events[0][2], "https://github.com/example/repo");
+  assert.deepEqual(events[0][3], { githubToken: "private-token" });
+  assert.deepEqual(events.slice(1), [
     ["branch", "agent/task-123"],
     ["agent", "Fix the login bug", "/tmp/task-123"]
   ]);
