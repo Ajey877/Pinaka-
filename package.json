@@ -8,7 +8,7 @@
     "packages/*"
   ],
   "scripts": {
-    "test": "echo \"Tests will be configured in the next phase.\"",
-    "lint": "echo \"Linting will be configured in the next phase.\""
+    "test": "node --test packages/core/test/*.test.mjs packages/tools/test/*.test.mjs",
+    "lint": "node --check packages/core/src/*.mjs && node --check packages/tools/src/*.mjs && node --check apps/agent/src/*.mjs"
   }
 }
