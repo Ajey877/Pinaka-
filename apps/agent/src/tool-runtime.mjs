@@ -49,6 +49,11 @@ export function createToolRegistry({ workspaceRoot, githubToken = "" } = {}) {
     run: () => git.currentCommit()
   });
 
+  registry.register("git.diff", {
+    description: "Read the bounded working-tree diff for review.",
+    run: ({ staged = false, maxOutputBytes } = {}) => git.diff({ staged, maxOutputBytes })
+  });
+
   registry.register("git.clone", {
     description: "Clone an HTTPS GitHub repository into the controlled workspace.",
     run: ({ repositoryUrl } = {}) => git.clone(repositoryUrl)
