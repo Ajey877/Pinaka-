@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { readWebAsset, WEB_ASSET_PATHS } from "../src/web-server.mjs";
 
 test("web server exposes only the known browser assets", async () => {
-  assert.deepEqual(WEB_ASSET_PATHS, ["/", "/app.css", "/app.js", "/approval-ui.js", "/auth-ui.js"]);
+  assert.deepEqual(WEB_ASSET_PATHS, ["/", "/app.css", "/app.js", "/approval-ui.js", "/auth-ui.js", "/history-ui.js"]);
   const index = await readWebAsset("/");
   assert.equal(index.contentType, "text/html; charset=utf-8");
   assert.match(index.content.toString("utf8"), /<title>Pinaka — Coding Agent<\/title>/);
@@ -23,6 +23,10 @@ test("web server exposes only the known browser assets", async () => {
   const auth = await readWebAsset("/auth-ui.js");
   assert.equal(auth.contentType, "text/javascript; charset=utf-8");
   assert.match(auth.content.toString("utf8"), /Sign in with GitHub/);
+
+  const history = await readWebAsset("/history-ui.js");
+  assert.equal(history.contentType, "text/javascript; charset=utf-8");
+  assert.match(history.content.toString("utf8"), /Task history/);
 });
 
 test("web server rejects arbitrary or traversal asset paths", async () => {
