@@ -23,18 +23,25 @@ export const DEFAULT_ALLOWED_EXECUTABLES = Object.freeze([
 ]);
 
 const BLOCKED_NODE_FLAGS = new Set(["-e", "--eval", "-p", "--print"]);
+const WINDOWS_COMMAND_FILES = new Map([
+  ["npm", "npm.cmd"],
+  ["npx", "npx.cmd"],
+  ["pnpm", "pnpm.cmd"],
+  ["yarn", "yarn.cmd"]
+]);
 
 function validateExecutable(executable, allowedExecutables) {
   if (typeof executable !== "string" || executable.trim() === "") {
     throw new ToolError("executable is required", "INVALID_ARGUMENT");
   }
   const normalized = executable.trim().toLowerCase();
-  if (!allowedExecutables.has(normalized)) {
+  const withoutCmd = normalized.endsWith(".cmd") ? normalized.slice(0, -4) : normalized;
+  if (!allowedExecutables.has(normalized) && !allowedExecutables.has(withoutCmd)) {
     throw new ToolError("executable is not allowed by the tool policy", "COMMAND_NOT_ALLOWED", {
       executable
     });
   }
-  return normalized;
+  return withoutCmd;
 }
 
 function validateArgs(executable, args) {
@@ -44,6 +51,27 @@ function validateArgs(executable, args) {
   if (executable === "node" && args.some((arg) => BLOCKED_NODE_FLAGS.has(arg))) {
     throw new ToolError("node evaluation flags are disabled", "COMMAND_NOT_ALLOWED");
   }
+}
+
+function buildChildEnvironment() {
+  const safeKeys = [
+    "PATH",
+    "HOME",
+    "USERPROFILE",
+    "SystemRoot",
+    "TEMP",
+    "TMP",
+    "TMPDIR",
+    "PATHEXT",
+    "ComSpec",
+    "NODE_PATH",
+    "CI"
+  ];
+  return Object.fromEntries(
+    safeKeys
+      .filter((key) => typeof process.env[key] === "string")
+      .map((key) => [key, process.env[key]])
+  );
 }
 
 export async function runCommand({
@@ -66,13 +94,16 @@ export async function runCommand({
   const normalizedExecutable = validateExecutable(executable, allowed);
   validateArgs(normalizedExecutable, args);
   const workingDirectory = resolveSafePath(workspaceRoot, cwd);
+  const childExecutable = process.platform === "win32"
+    ? (WINDOWS_COMMAND_FILES.get(normalizedExecutable) || normalizedExecutable)
+    : normalizedExecutable;
 
   return new Promise((resolve, reject) => {
-    const child = spawn(normalizedExecutable, args, {
+    const child = spawn(childExecutable, args, {
       cwd: workingDirectory,
       shell: false,
       windowsHide: true,
-      env: process.env
+      env: buildChildEnvironment()
     });
 
     let stdout = "";
@@ -80,6 +111,7 @@ export async function runCommand({
     let outputBytes = 0;
     let timedOut = false;
     let settled = false;
+    let truncated = false;
 
     const finish = (result) => {
       if (settled) return;
@@ -94,11 +126,21 @@ export async function runCommand({
     };
 
     const append = (target, chunk) => {
+      if (outputBytes >= maxOutputBytes) {
+        truncated = true;
+        return target;
+      }
       const text = chunk.toString("utf8");
       const bytes = Buffer.byteLength(text, "utf8");
-      if (outputBytes >= maxOutputBytes) return target;
       const remaining = maxOutputBytes - outputBytes;
-      const accepted = bytes <= remaining ? text : Buffer.from(text).subarray(0, remaining).toString("utf8");
+      if (bytes <= remaining) {
+        outputBytes += bytes;
+        return target + text;
+      }
+
+      truncated = true;
+      const acceptedBuffer = Buffer.from(text, "utf8").subarray(0, remaining);
+      const accepted = acceptedBuffer.toString("utf8");
       outputBytes += Buffer.byteLength(accepted, "utf8");
       return target + accepted;
     };
@@ -120,7 +162,7 @@ export async function runCommand({
         timedOut,
         stdout,
         stderr,
-        outputTruncated: outputBytes >= maxOutputBytes
+        outputTruncated: truncated
       });
     });
 
