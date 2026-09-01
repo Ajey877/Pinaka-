@@ -57,7 +57,8 @@ test("task runner executes the workspace lifecycle and returns completion status
     routerFactory: () => ({ chat: async () => ({}) }),
     gitFactory: ({ workspaceRoot }) => ({
       async clone(url) { events.push(["clone", workspaceRoot, url]); },
-      async createBranch(name) { events.push(["branch", name]); }
+      async createBranch(name) { events.push(["branch", name]); },
+      async diff() { return { text: "", truncated: false }; }
     }),
     registryFactory: ({ workspaceRoot }) => ({ workspaceRoot }),
     agentRunner: async ({ task, registry }) => {
@@ -84,6 +85,40 @@ test("task runner executes the workspace lifecycle and returns completion status
   assert.equal(workspaceManager.active.size, 0);
 });
 
+test("task runner retains a bounded final diff after execution", async () => {
+  const workspaceManager = makeWorkspaceManager();
+  const diffText = [
+    "diff --git a/src/login.js b/src/login.js",
+    "index 1111111..2222222 100644",
+    "--- a/src/login.js",
+    "+++ b/src/login.js",
+    "@@ -1 +1 @@",
+    "-return false;",
+    "+return true;"
+  ].join("\\n");
+  const runner = new AgentTaskRunner({
+    workspaceManager,
+    routerFactory: () => ({ chat: async () => ({}) }),
+    gitFactory: () => ({
+      async clone() {},
+      async createBranch() {},
+      async diff() { return { text: diffText, truncated: false }; }
+    }),
+    registryFactory: () => ({ workspaceRoot: "/tmp/task-diff" }),
+    agentRunner: async () => ({ status: "accepted", verification: { passed: true } })
+  });
+
+  await runner.start({
+    repositoryUrl: "https://github.com/example/repo",
+    task: "Fix login",
+    taskId: "task-diff"
+  });
+  const current = await waitForStatus(runner, "task-diff", "completed");
+  assert.equal(current.result.diff.text, diffText);
+  assert.equal(current.result.diff.truncated, false);
+  assert.equal(current.result.diff.changeCount, null);
+});
+
 test("task runner surfaces tool and agent telemetry without raw inputs", async () => {
   const workspaceManager = makeWorkspaceManager();
   const runner = new AgentTaskRunner({
@@ -91,7 +126,8 @@ test("task runner surfaces tool and agent telemetry without raw inputs", async (
     routerFactory: () => ({ chat: async () => ({}) }),
     gitFactory: () => ({
       async clone() {},
-      async createBranch() {}
+      async createBranch() {},
+      async diff() { return { text: "", truncated: false }; }
     }),
     registryFactory: ({ onToolEvent }) => {
       onToolEvent({ type: "tool.start", tool: "files.read", input: "secret" });
@@ -136,7 +172,8 @@ test("task runner retains a useful failure result when execution fails", async (
     workspaceManager,
     gitFactory: () => ({
       async clone() { throw Object.assign(new Error("clone failed"), { code: "GIT_COMMAND_FAILED" }); },
-      async createBranch() {}
+      async createBranch() {},
+      async diff() { return { text: "", truncated: false }; }
     }),
     routerFactory: () => ({ chat: async () => ({}) })
   });
