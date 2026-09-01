@@ -26,7 +26,7 @@ test("runAgentTurn sends task and repository context to the model router", async
   assert.equal(result.response.content, "mocked response");
   assert.deepEqual(router.calls[0].options, { provider: "free" });
   assert.match(router.calls[0].request.messages[1].content, /Fix the login bug/);
-  assert.match(router.calls[0].request.messages[1].content, /repository inspection:/);
+  assert.match(router.calls[0].request.messages[1].content, /Repository inspection:\n/);
 });
 
 test("runAgentTurn rejects an oversized repository context", async () => {
