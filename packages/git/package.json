@@ -5,5 +5,8 @@
   "type": "module",
   "exports": {
     ".": "./src/index.mjs"
+  },
+  "dependencies": {
+    "@pinaka/tools": "0.1.0"
   }
 }
