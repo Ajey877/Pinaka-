@@ -4,6 +4,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { GitOperationError, GitRepository } from "../src/index.mjs";
+import { __test as gitRepositoryTest } from "../src/git-repository.mjs";
 import { runCommand } from "@pinaka/tools";
 
 const roots = [];
@@ -99,6 +100,16 @@ test("clone accepts only HTTPS GitHub repository URLs", async () => {
     () => repo.clone("file:///tmp/repo.git"),
     (error) => error instanceof GitOperationError && error.code === "INVALID_REPOSITORY_URL"
   );
+});
+
+test("authenticated clone builds a scoped Git HTTP auth environment", () => {
+  const environment = gitRepositoryTest.buildGitAuthEnvironment("secret-token");
+  assert.equal(environment.GIT_TERMINAL_PROMPT, "0");
+  assert.equal(environment.GIT_CONFIG_COUNT, "1");
+  assert.equal(environment.GIT_CONFIG_KEY_0, "http.extraHeader");
+  assert.equal(environment.GIT_CONFIG_VALUE_0, "Authorization: Bearer secret-token");
+  assert.equal(Object.prototype.hasOwnProperty.call(environment, "PATH"), false);
+  assert.equal(Object.prototype.hasOwnProperty.call(environment, "OPENROUTER_API_KEY"), false);
 });
 
 test("assertClean rejects uncommitted changes", async () => {
