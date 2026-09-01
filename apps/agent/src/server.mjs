@@ -60,6 +60,51 @@ function extractTaskId(pathname) {
   return match?.[1] || null;
 }
 
+function extractTaskEventsId(pathname) {
+  const match = pathname.match(/^\/v1\/agent\/tasks\/([A-Za-z0-9][A-Za-z0-9_-]{0,63})\/events$/);
+  return match?.[1] || null;
+}
+
+function writeSse(res, event) {
+  res.write(`id: ${event.id}\n`);
+  res.write("event: task\n");
+  res.write(`data: ${JSON.stringify(event)}\n\n`);
+}
+
+function streamTaskEvents(res, taskId) {
+  const history = taskRunner.events(taskId);
+  res.writeHead(200, {
+    "content-type": "text/event-stream; charset=utf-8",
+    "cache-control": "no-cache, no-store, must-revalidate",
+    "connection": "keep-alive",
+    "x-accel-buffering": "no",
+    "access-control-allow-origin": "*"
+  });
+  res.flushHeaders?.();
+  res.write(": connected\n\n");
+  for (const event of history) writeSse(res, event);
+
+  let closed = false;
+  const unsubscribe = taskRunner.subscribe(taskId, (event) => {
+    if (closed) return;
+    writeSse(res, event);
+    if (["completed", "needs_attention", "failed"].includes(event.status)) {
+      closed = true;
+      clearInterval(heartbeat);
+      unsubscribe();
+      res.end();
+    }
+  });
+  const heartbeat = setInterval(() => {
+    if (!closed) res.write(": heartbeat\n\n");
+  }, 15_000);
+  res.on("close", () => {
+    closed = true;
+    clearInterval(heartbeat);
+    unsubscribe();
+  });
+}
+
 const server = http.createServer(async (req, res) => {
   if (req.method === "OPTIONS") {
     res.writeHead(204, {
@@ -105,6 +150,12 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (req.method === "GET") {
+      const eventsTaskId = extractTaskEventsId(url.pathname);
+      if (eventsTaskId) {
+        streamTaskEvents(res, eventsTaskId);
+        return;
+      }
+
       const taskId = extractTaskId(url.pathname);
       if (taskId) {
         sendJson(res, 200, taskRunner.get(taskId));
