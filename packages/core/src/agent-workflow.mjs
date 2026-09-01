@@ -1,4 +1,5 @@
-import { ModelError, normalizeTask } from "@pinaka/model";
+import { ModelError } from "@pinaka/model";
+import { normalizeTask } from "./agent-core.mjs";
 import { runAgentTurn } from "./agent-executor.mjs";
 
 const DEFAULT_MAX_FILES = 2_000;
