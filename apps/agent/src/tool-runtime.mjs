@@ -1,3 +1,4 @@
+import { GitRepository } from "@pinaka/git";
 import {
   GitHubClient,
   ToolRegistry,
@@ -10,6 +11,7 @@ import {
 export function createToolRegistry({ workspaceRoot, githubToken = "" } = {}) {
   const registry = new ToolRegistry();
   const github = new GitHubClient({ token: githubToken });
+  const git = new GitRepository({ workspaceRoot });
 
   registry.register("files.list", {
     description: "List files in the controlled workspace.",
@@ -30,6 +32,31 @@ export function createToolRegistry({ workspaceRoot, githubToken = "" } = {}) {
   registry.register("terminal.run", {
     description: "Run an allow-listed executable without a shell in the controlled workspace.",
     run: (input = {}) => runCommand({ workspaceRoot, ...input })
+  });
+
+  registry.register("git.status", {
+    description: "Read the current Git branch and working-tree status.",
+    run: () => git.status()
+  });
+
+  registry.register("git.current_commit", {
+    description: "Read the current Git HEAD commit.",
+    run: () => git.currentCommit()
+  });
+
+  registry.register("git.clone", {
+    description: "Clone an HTTPS GitHub repository into the controlled workspace.",
+    run: ({ repositoryUrl } = {}) => git.clone(repositoryUrl)
+  });
+
+  registry.register("git.create_branch", {
+    description: "Create an isolated agent branch from a clean workspace.",
+    run: ({ branchName } = {}) => git.createBranch(branchName)
+  });
+
+  registry.register("git.assert_clean", {
+    description: "Verify that the workspace has no uncommitted changes.",
+    run: () => git.assertClean()
   });
 
   registry.register("github.repository", {
