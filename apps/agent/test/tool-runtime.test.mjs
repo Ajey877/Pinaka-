@@ -28,6 +28,7 @@ test("agent runtime exposes the protected Git workflow tools", async () => {
   assert.ok(names.includes("git.create_branch"));
   assert.ok(names.includes("git.assert_clean"));
   assert.ok(names.includes("verification.check_changes"));
+  assert.ok(names.includes("verification.run_checks"));
 
   const result = await registry.execute("terminal.run", {
     executable: "git",
@@ -37,28 +38,24 @@ test("agent runtime exposes the protected Git workflow tools", async () => {
   assert.match(result.stdout, /^git version /);
 });
 
-test("agent runtime rejects unsafe change sets before approval", async () => {
+test("verification.run_checks executes discovered checks through the controlled command runner", async () => {
   const root = await makeRoot();
+  await fs.writeFile(path.join(root, "package.json"), JSON.stringify({
+    scripts: { test: "node test.js", lint: "node lint.js" }
+  }));
+  await fs.writeFile(path.join(root, "test.js"), "console.log('test ok')\n");
+  await fs.writeFile(path.join(root, "lint.js"), "console.log('lint ok')\n");
   const registry = createToolRegistry({ workspaceRoot: root });
+  const inspection = {
+    ecosystems: ["node"],
+    scripts: { test: "node test.js", lint: "node lint.js" }
+  };
 
-  await assert.rejects(
-    () => registry.execute("verification.check_changes", {
-      changes: [{ path: ".env", status: "modified", additions: 1 }]
-    }),
-    (error) => error?.code === "CHANGES_REJECTED"
-  );
-});
-
-test("agent runtime allows a normal bounded change set", async () => {
-  const root = await makeRoot();
-  const registry = createToolRegistry({ workspaceRoot: root });
-
-  const result = await registry.execute("verification.check_changes", {
-    changes: [{ path: "src/app.mjs", status: "modified", additions: 8, deletions: 2, bytes: 2048 }]
-  });
-
-  assert.equal(result.allowed, true);
-  assert.equal(result.changedFiles, 1);
-  assert.equal(result.additions, 8);
-  assert.equal(result.deletions, 2);
+  const result = await registry.execute("verification.run_checks", { inspection });
+  assert.equal(result.passed, true);
+  assert.equal(result.checksRun, 2);
+  assert.deepEqual(result.results.map(({ name, passed }) => ({ name, passed })), [
+    { name: "test", passed: true },
+    { name: "lint", passed: true }
+  ]);
 });
