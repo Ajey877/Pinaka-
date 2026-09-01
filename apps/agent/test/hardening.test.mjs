@@ -43,3 +43,15 @@ test("client key prefers the first forwarded address", () => {
   assert.equal(clientKey({ headers: { "x-forwarded-for": "203.0.113.8, 10.0.0.1" }, socket: { remoteAddress: "127.0.0.1" } }), "203.0.113.8");
   assert.equal(clientKey({ headers: {}, socket: { remoteAddress: "127.0.0.1" } }), "127.0.0.1");
 });
+
+test("concurrency slots can be released after a terminal task", () => {
+  const limiter = new ConcurrentTaskLimiter({ limit: 2 });
+  assert.equal(limiter.tryAcquire(9), true);
+  assert.equal(limiter.tryAcquire(9), true);
+  limiter.release(9);
+  assert.equal(limiter.count(9), 1);
+  assert.equal(limiter.tryAcquire(9), true);
+  limiter.release(9);
+  limiter.release(9);
+  assert.equal(limiter.count(9), 0);
+});
