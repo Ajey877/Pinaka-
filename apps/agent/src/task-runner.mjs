@@ -78,7 +78,8 @@ function makeJob(taskId, repositoryUrl, task) {
 export class AgentTaskRunner {
   #workspaceManager;
   #jobs = new Map();
-  #events = new Map();
+  #eventHistory = new Map();
+  #subscribers = new Map();
   #routerFactory;
   #gitFactory;
   #registryFactory;
@@ -128,15 +129,15 @@ export class AgentTaskRunner {
     }
     if (typeof listener !== "function") throw new TypeError("event listener must be a function");
 
-    let listeners = this.#events.get(taskId);
+    let listeners = this.#subscribers.get(taskId);
     if (!listeners) {
       listeners = new Set();
-      this.#events.set(taskId, listeners);
+      this.#subscribers.set(taskId, listeners);
     }
     listeners.add(listener);
     return () => {
       listeners.delete(listener);
-      if (listeners.size === 0) this.#events.delete(taskId);
+      if (listeners.size === 0) this.#subscribers.delete(taskId);
     };
   }
 
@@ -148,7 +149,7 @@ export class AgentTaskRunner {
       error.code = "TASK_NOT_FOUND";
       throw error;
     }
-    return [...(this.#jobEvents(taskId))];
+    return [...(this.#eventHistory.get(taskId) || [])];
   }
 
   async start({ repositoryUrl, task, taskId = crypto.randomUUID().replaceAll("-", "").slice(0, 20), model, apiKey, baseUrl } = {}) {
@@ -171,16 +172,10 @@ export class AgentTaskRunner {
 
     const job = makeJob(taskId, safeRepositoryUrl, safeTask);
     this.#jobs.set(taskId, job);
-    this.#events.set(taskId, []);
+    this.#eventHistory.set(taskId, []);
     this.#emit(job, "queued", "Task queued");
     void this.#run(job, { model, apiKey, baseUrl });
     return { ...job };
-  }
-
-  #jobEvents(taskId) {
-    const events = this.#events.get(taskId);
-    if (Array.isArray(events)) return events;
-    return [];
   }
 
   #emit(job, stage, message, data = {}) {
@@ -193,10 +188,13 @@ export class AgentTaskRunner {
       timestamp: new Date().toISOString(),
       data: data && typeof data === "object" ? { ...data } : {}
     });
-    const events = this.#jobEvents(job.id);
-    if (events.length >= MAX_EVENTS_PER_TASK) events.shift();
-    events.push(event);
-    for (const listener of this.#events.get(job.id) instanceof Set ? this.#events.get(job.id) : []) {
+
+    const history = this.#eventHistory.get(job.id) || [];
+    if (history.length >= MAX_EVENTS_PER_TASK) history.shift();
+    history.push(event);
+    this.#eventHistory.set(job.id, history);
+
+    for (const listener of this.#subscribers.get(job.id) || []) {
       try {
         listener(event);
       } catch {
