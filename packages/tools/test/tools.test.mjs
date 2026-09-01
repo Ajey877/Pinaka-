@@ -66,7 +66,7 @@ test("shell tool runs an allowed command without a shell", async () => {
   const workspace = await makeWorkspace();
   const result = await runCommand({
     workspaceRoot: workspace,
-    executable: process.platform === "win32" ? "node" : "node",
+    executable: "node",
     args: ["--version"],
     timeoutMs: 5_000
   });
@@ -98,11 +98,15 @@ test("tool registry validates registration and execution", async () => {
   assert.throws(() => registry.get("missing"), /unknown tool/);
 });
 
-test("GitHub client builds safe repository URLs and accepts an optional token", async () => {
+test("GitHub client validates repository and content paths", async () => {
   const client = new GitHubClient({ apiBase: "https://api.github.com", token: "test-token" });
   assert.equal(client.apiBase, "https://api.github.com");
   await assert.rejects(
     () => client.getRepository("owner/evil", "repo"),
+    (error) => error instanceof ToolError && error.code === "INVALID_ARGUMENT"
+  );
+  await assert.rejects(
+    () => client.getContents("owner", "repo", "src/../secret"),
     (error) => error instanceof ToolError && error.code === "INVALID_ARGUMENT"
   );
 });
