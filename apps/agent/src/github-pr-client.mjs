@@ -45,8 +45,8 @@ function compactText(value, max, fallback) {
 export class GitHubPullRequestClient {
   #token;
 
-  constructor({ token } = {}) {
-    this.#token = validateToken(token);
+  constructor({ token = "" } = {}) {
+    this.#token = typeof token === "string" ? token.trim() : "";
   }
 
   async getRepository(repositoryUrl) {
