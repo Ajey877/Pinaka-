@@ -57,7 +57,7 @@ function addActivity(title, detail, icon = "•") {
   body.append(strong, span);
   item.append(iconNode, body);
   activityList.prepend(item);
-  while (activityList.children.length > 8) activityList.lastElementChild.remove();
+  while (activityList.children.length > 16) activityList.lastElementChild.remove();
 }
 
 async function api(path, options = {}) {
@@ -155,18 +155,69 @@ function renderTaskResult(job) {
     );
   }
 
-  const review = result.review;
-  if (review?.approved !== undefined) {
+  const review = result.finalReview || result.review;
+  if (review?.accepted !== undefined || review?.approved !== undefined) {
+    const accepted = review.accepted === true || review.approved === true;
     addActivity(
-      review.approved ? "Final review approved" : "Final review rejected",
-      review.summary || "Review completed",
-      review.approved ? "✓" : "!"
+      accepted ? "Final review approved" : "Final review rejected",
+      review.verdict?.summary || review.summary || "Review completed",
+      accepted ? "✓" : "!"
     );
   }
 }
 
 function applyTaskEvent(event) {
   if (!event || typeof event !== "object") return null;
+  const type = typeof event.type === "string" ? event.type : "task.stage";
+  const data = event.data && typeof event.data === "object" ? event.data : {};
+
+  if (type === "tool.start") {
+    const tool = typeof data.tool === "string" ? data.tool : "tool";
+    addActivity(`Running ${tool}`, "Agent requested a capability.", "↗");
+    return event.status;
+  }
+  if (type === "tool.finish") {
+    const tool = typeof data.tool === "string" ? data.tool : "tool";
+    const ok = data.ok === true;
+    const duration = Number.isFinite(data.durationMs) ? ` · ${data.durationMs} ms` : "";
+    addActivity(
+      ok ? `Finished ${tool}` : `Failed ${tool}`,
+      ok ? `Completed successfully${duration}` : `${data.errorCode || "Execution failed"}${duration}`,
+      ok ? "✓" : "!"
+    );
+    return event.status;
+  }
+  if (type === "verification.complete") {
+    const passed = data.passed === true;
+    addActivity(
+      passed ? "Verification passed" : "Verification failed",
+      `${data.checksRun || 0}/${data.checksPlanned || 0} checks`,
+      passed ? "✓" : "!"
+    );
+    return event.status;
+  }
+  if (type === "repair.start") {
+    addActivity("Repair started", `Attempt ${data.attempt || "?"}`, "↻");
+    return event.status;
+  }
+  if (type === "repair.complete") {
+    addActivity("Repair complete", `Attempt ${data.attempt || "?"} · ${data.toolCalls || 0} tool calls`, "✓");
+    return event.status;
+  }
+  if (type === "review.start") {
+    addActivity("Final review", "Independent review is evaluating the change.", "⌁");
+    return event.status;
+  }
+  if (type === "review.complete") {
+    const accepted = data.accepted === true;
+    addActivity(
+      accepted ? "Review approved" : "Review rejected",
+      `${data.findings || 0} findings · ${data.blockers || 0} blockers`,
+      accepted ? "✓" : "!"
+    );
+    return event.status;
+  }
+
   const stage = typeof event.stage === "string" ? event.stage : "agent";
   const message = typeof event.message === "string" ? event.message : "Working…";
   const icon = ["completed"].includes(event.status) ? "✓" : ["needs_attention", "failed"].includes(event.status) ? "!" : "•";
@@ -206,22 +257,18 @@ function streamTask(taskId) {
   return new Promise((resolve, reject) => {
     const source = new EventSource(`/v1/agent/tasks/${encodeURIComponent(taskId)}/events`);
     let settled = false;
-    let latestJob = null;
 
     const finish = async (status) => {
       if (settled) return;
       settled = true;
       source.close();
       try {
-        latestJob = await api(`/v1/agent/tasks/${encodeURIComponent(taskId)}`);
-        renderTaskResult(latestJob);
+        const job = await api(`/v1/agent/tasks/${encodeURIComponent(taskId)}`);
+        renderTaskResult(job);
+        resolve(job);
       } catch (error) {
-        if (status === "failed") {
-          reject(error);
-          return;
-        }
+        reject(error);
       }
-      resolve(latestJob);
     };
 
     source.addEventListener("task", (message) => {
@@ -243,13 +290,12 @@ function streamTask(taskId) {
         const job = await api(`/v1/agent/tasks/${encodeURIComponent(taskId)}`);
         if (["completed", "needs_attention", "failed"].includes(job.status)) {
           settled = true;
-          applyTaskEvent({ stage: job.stage, message: job.message, status: job.status });
           renderTaskResult(job);
           resolve(job);
           return;
         }
       } catch {
-        // Fall through to polling when the task state cannot be read.
+        // Polling below remains the authoritative fallback.
       }
       pollTask(taskId).then(resolve, reject);
     };
