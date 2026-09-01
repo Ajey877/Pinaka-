@@ -18,6 +18,11 @@ state.textContent = "Waiting";
 heading.append(left, state);
 const summary = document.createElement("p");
 summary.className = "approval-summary";
+const prLink = document.createElement("a");
+prLink.className = "approval-pr-link";
+prLink.target = "_blank";
+prLink.rel = "noopener noreferrer";
+prLink.hidden = true;
 const actions = document.createElement("div");
 actions.className = "approval-actions";
 const reject = document.createElement("button");
@@ -27,13 +32,13 @@ reject.textContent = "Reject & discard";
 const approve = document.createElement("button");
 approve.className = "primary-button";
 approve.type = "button";
-approve.textContent = "Approve & commit";
+approve.textContent = "Approve & create PR";
 actions.append(reject, approve);
-card.append(heading, summary, actions);
+card.append(heading, summary, prLink, actions);
 diffViewer.parentElement.parentElement.appendChild(card);
 
 const style = document.createElement("style");
-style.textContent = `.approval-card{margin-top:18px}.approval-summary{margin:0;color:var(--muted);font-size:12px;line-height:1.5}.approval-actions{display:flex;justify-content:flex-end;gap:10px;margin-top:16px}.secondary-button{border:1px solid var(--hairline);border-radius:15px;padding:12px 15px;background:var(--card-strong);color:var(--text);font-weight:700}.approval-card .primary-button,.approval-card .secondary-button{min-width:150px}@media(max-width:640px){.approval-actions{flex-direction:column}.approval-card .primary-button,.approval-card .secondary-button{width:100%}}`;
+style.textContent = `.approval-card{margin-top:18px}.approval-summary{margin:0;color:var(--muted);font-size:12px;line-height:1.5}.approval-pr-link{display:inline-block;margin-top:12px;font-size:13px;font-weight:700;color:var(--accent,#007aff);text-decoration:none}.approval-pr-link:hover{text-decoration:underline}.approval-actions{display:flex;justify-content:flex-end;gap:10px;margin-top:16px}.secondary-button{border:1px solid var(--hairline);border-radius:15px;padding:12px 15px;background:var(--card-strong);color:var(--text);font-weight:700}.approval-card .primary-button,.approval-card .secondary-button{min-width:170px}@media(max-width:640px){.approval-actions{flex-direction:column}.approval-card .primary-button,.approval-card .secondary-button{width:100%}}`;
 document.head.appendChild(style);
 card.hidden = true;
 
@@ -43,12 +48,21 @@ function show(job) {
   const pending = approval?.status === "pending";
   approve.disabled = !pending;
   reject.disabled = !pending;
+  prLink.hidden = true;
+  prLink.removeAttribute("href");
   if (pending) {
     state.textContent = "Awaiting approval";
     summary.textContent = "Pinaka finished the verified change. Review the diff above before approving.";
   } else if (approval?.status === "approved") {
-    state.textContent = "Approved";
-    summary.textContent = approval.commit ? `Committed on ${approval.branch} · ${approval.commit.slice(0, 12)}. Nothing was pushed automatically.` : "Changes approved. Nothing was pushed automatically.";
+    state.textContent = approval.published ? "PR created" : "Approved";
+    summary.textContent = approval.published
+      ? `Published on ${approval.branch} · ${approval.commit?.slice(0, 12) || "commit created"}.`
+      : "Changes approved, but no GitHub publication was recorded.";
+    if (approval.pullRequest?.url) {
+      prLink.hidden = false;
+      prLink.href = approval.pullRequest.url;
+      prLink.textContent = approval.pullRequest.number ? `Open pull request #${approval.pullRequest.number}` : "Open pull request";
+    }
   } else if (approval?.status === "rejected") {
     state.textContent = "Rejected";
     summary.textContent = "The proposed change was rejected. No changes were published.";
@@ -68,7 +82,7 @@ async function getTasks() {
 async function decide(decision, taskId) {
   approve.disabled = true;
   reject.disabled = true;
-  state.textContent = decision === "approve" ? "Committing…" : "Rejecting…";
+  state.textContent = decision === "approve" ? "Creating PR…" : "Rejecting…";
   const response = await fetch(`/v1/agent/tasks/${encodeURIComponent(taskId)}/approval`, {
     method: "POST",
     headers: { "content-type": "application/json" },
