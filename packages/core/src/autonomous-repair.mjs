@@ -72,21 +72,36 @@ function buildRepairMessages(task, verification, attempt) {
   ];
 }
 
-async function runVerification(registry, inspection, timeoutMs) {
-  return normalizeVerificationResult(await registry.execute("verification.run_checks", {
+async function runVerification(registry, inspection, timeoutMs, onEvent) {
+  onEvent?.({ type: "verification.start" });
+  const result = normalizeVerificationResult(await registry.execute("verification.run_checks", {
     inspection,
     timeoutMs,
     continueOnFailure: false
   }));
+  onEvent?.({
+    type: "verification.complete",
+    passed: result.passed === true,
+    checksPlanned: result.checksPlanned || 0,
+    checksRun: result.checksRun || 0
+  });
+  return result;
 }
 
-async function finishWithReview({ registry, router, reviewRouter, task, codingResult, verification, signal }) {
+async function finishWithReview({ registry, router, reviewRouter, task, codingResult, verification, signal, onEvent }) {
+  onEvent?.({ type: "review.start" });
   const review = await runFinalReview({
     registry,
     router: reviewRouter || router,
     task,
     verification,
     signal
+  });
+  onEvent?.({
+    type: "review.complete",
+    accepted: review.accepted === true,
+    findings: Array.isArray(review.verdict?.findings) ? review.verdict.findings.length : 0,
+    blockers: Array.isArray(review.blockers) ? review.blockers.length : 0
   });
   return {
     ...codingResult,
@@ -107,7 +122,8 @@ export async function runAutonomousRepairLoop({
   maxRounds,
   maxRepairAttempts = DEFAULT_MAX_REPAIR_ATTEMPTS,
   verificationTimeoutMs,
-  signal
+  signal,
+  onEvent
 } = {}) {
   const safeRegistry = validateRegistry(registry);
   const safeRouter = validateRouter(router);
@@ -129,11 +145,13 @@ export async function runAutonomousRepairLoop({
   let verification = await runVerification(
     safeRegistry,
     codingResult.repositoryInspection,
-    verificationTimeoutMs
+    verificationTimeoutMs,
+    onEvent
   );
   const attempts = [];
 
   if (verification.checksPlanned === 0) {
+    onEvent?.({ type: "task.unverified" });
     return {
       ...codingResult,
       verification,
@@ -150,11 +168,13 @@ export async function runAutonomousRepairLoop({
       task: safeTask,
       codingResult: { ...codingResult, repairAttempts: attempts },
       verification,
-      signal
+      signal,
+      onEvent
     });
   }
 
   for (let attempt = 1; attempt <= repairAttempts; attempt += 1) {
+    onEvent?.({ type: "repair.start", attempt });
     const repairResult = await runToolCallingLoop({
       router: safeRouter,
       registry: safeRegistry,
@@ -165,11 +185,13 @@ export async function runAutonomousRepairLoop({
       signal,
       toolChoice: "auto"
     });
+    onEvent?.({ type: "repair.complete", attempt, rounds: repairResult.rounds, toolCalls: repairResult.toolCalls });
 
     verification = await runVerification(
       safeRegistry,
       codingResult.repositoryInspection,
-      verificationTimeoutMs
+      verificationTimeoutMs,
+      onEvent
     );
 
     attempts.push({
@@ -186,11 +208,13 @@ export async function runAutonomousRepairLoop({
         task: safeTask,
         codingResult: { ...codingResult, repairAttempts: attempts },
         verification,
-        signal
+        signal,
+        onEvent
       });
     }
   }
 
+  onEvent?.({ type: "task.failed", reason: "repair_budget_exhausted" });
   return {
     ...codingResult,
     verification,
