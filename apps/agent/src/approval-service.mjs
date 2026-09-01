@@ -3,6 +3,7 @@ import path from "node:path";
 import { WorkspaceManager } from "@pinaka/workspace";
 import { runCommand } from "@pinaka/tools";
 import { canDecideApproval, nextApprovalStatus } from "./approval-policy.mjs";
+import { GitHubPullRequestClient } from "./github-pr-client.mjs";
 
 const MAX_DIFF_CHARS = 120_000;
 const MAX_TASK_CHARS = 20_000;
@@ -14,24 +15,50 @@ function validateJob(job) {
   if (job.task.length > MAX_TASK_CHARS) throw Object.assign(new Error("task is too large for approval"), { code: "INVALID_JOB" });
   return job;
 }
+
 function normalizeDiff(job) {
   const diff = job.result?.diff;
   if (!diff || typeof diff.text !== "string" || diff.text.length === 0) throw Object.assign(new Error("no retained diff is available for approval"), { code: "NO_DIFF" });
   if (diff.text.length > MAX_DIFF_CHARS || diff.truncated === true) throw Object.assign(new Error("retained diff is truncated and cannot be approved"), { code: "DIFF_TRUNCATED" });
   return diff.text;
 }
+
 function makeCommitMessage(task) {
   const compact = task.replace(/\s+/g, " ").trim().replace(/[\r\n]/g, " ");
   const suffix = " [Pinaka]";
   return `${compact.slice(0, Math.max(1, COMMIT_MESSAGE_LIMIT - suffix.length))}${suffix}`;
 }
 
+function makePrTitle(task) {
+  const compact = task.replace(/\s+/g, " ").trim().replace(/[\r\n]/g, " ");
+  return `Pinaka: ${compact}`.slice(0, 256);
+}
+
+function makePrBody(job, commit) {
+  const summary = job.result?.finalReview?.summary || job.result?.review?.summary || "Verified and approved by the Pinaka review pipeline.";
+  return [
+    "## Pinaka change",
+    "",
+    summary.slice(0, 4_000),
+    "",
+    `- Task: ${job.task.replace(/\s+/g, " ").trim().slice(0, 2_000)}`,
+    `- Commit: ${commit.slice(0, 40)}`,
+    "- Verification and final review passed before approval.",
+    "- Changes were applied to a fresh clone and pushed to an isolated agent branch.",
+    ""
+  ].join("\n").slice(0, 10_000);
+}
+
 export class ApprovalService {
   #workspaceManager;
   #decisions = new Map();
-  constructor({ workspaceRoot, workspaceManager } = {}) {
+  #githubPrClient;
+
+  constructor({ workspaceRoot, workspaceManager, githubToken, githubPrClient } = {}) {
     this.#workspaceManager = workspaceManager || new WorkspaceManager({ rootDirectory: workspaceRoot });
+    this.#githubPrClient = githubPrClient || new GitHubPullRequestClient({ token: githubToken });
   }
+
   decorate(job) {
     validateJob(job);
     const decision = this.#decisions.get(job.id);
@@ -39,38 +66,64 @@ export class ApprovalService {
     if (canDecideApproval(job, "approve")) return { ...job, approval: { status: "pending", actions: ["approve", "reject"] } };
     return { ...job, approval: null };
   }
+
   async decide(job, approval) {
     validateJob(job);
     if (!canDecideApproval(job, approval)) throw Object.assign(new Error("task is not awaiting a valid approval decision"), { code: "APPROVAL_NOT_ALLOWED", statusCode: 409 });
     if (this.#decisions.has(job.id)) throw Object.assign(new Error("approval decision already recorded"), { code: "APPROVAL_ALREADY_DECIDED", statusCode: 409 });
+
     if (approval === "reject") {
-      const decision = { status: nextApprovalStatus(approval), decidedAt: new Date().toISOString() };
+      const decision = { status: nextApprovalStatus(approval), decidedAt: new Date().toISOString(), published: false };
       this.#decisions.set(job.id, decision);
       return { ...job, status: decision.status, approval: decision };
     }
+
     const diff = normalizeDiff(job);
     const workspace = await this.#workspaceManager.create(`approval-${job.id}`);
     try {
       const run = (args, options = {}) => runCommand({ workspaceRoot: workspace.path, executable: "git", args, ...options });
       const clone = await run(["clone", "--no-recurse-submodules", "--depth", "1", job.repositoryUrl, "."], { timeoutMs: 120_000, maxOutputBytes: 512 * 1024 });
       if (clone.exitCode !== 0 || clone.timedOut) throw Object.assign(new Error("approval clone failed"), { code: "APPROVAL_CLONE_FAILED" });
+
       const branch = `agent/${job.id}`;
-      const branchResult = await run(["switch", "-c", branch]);
+      const branchResult = await run(["switch", "-c", branch], { maxOutputBytes: 32 * 1024 });
       if (branchResult.exitCode !== 0) throw Object.assign(new Error("approval branch creation failed"), { code: "APPROVAL_BRANCH_FAILED" });
+
       const patchPath = path.join(workspace.path, ".pinaka-approval.patch");
       await fs.writeFile(patchPath, diff, "utf8");
-      const check = await run(["apply", "--check", ".pinaka-approval.patch"]);
+      const check = await run(["apply", "--check", ".pinaka-approval.patch"], { maxOutputBytes: 128 * 1024 });
       if (check.exitCode !== 0) throw Object.assign(new Error("approved diff no longer applies cleanly to the repository"), { code: "APPROVAL_DIFF_CONFLICT" });
-      const apply = await run(["apply", ".pinaka-approval.patch"]);
+      const apply = await run(["apply", ".pinaka-approval.patch"], { maxOutputBytes: 128 * 1024 });
       if (apply.exitCode !== 0) throw Object.assign(new Error("approved diff could not be applied"), { code: "APPROVAL_DIFF_APPLY_FAILED" });
       await fs.rm(patchPath, { force: true });
-      const add = await run(["add", "-A"]);
+
+      const add = await run(["add", "-A"], { maxOutputBytes: 32 * 1024 });
       if (add.exitCode !== 0) throw Object.assign(new Error("approved changes could not be staged"), { code: "APPROVAL_STAGE_FAILED" });
       const commit = await run(["-c", "user.name=Pinaka", "-c", "user.email=pinaka@localhost", "commit", "-m", makeCommitMessage(job.task)], { maxOutputBytes: 128 * 1024 });
       if (commit.exitCode !== 0) throw Object.assign(new Error("approved changes could not be committed"), { code: "APPROVAL_COMMIT_FAILED" });
       const head = await run(["rev-parse", "HEAD"], { maxOutputBytes: 8 * 1024 });
       if (head.exitCode !== 0) throw Object.assign(new Error("approved commit could not be read"), { code: "APPROVAL_HEAD_FAILED" });
-      const decision = { status: nextApprovalStatus(approval), decidedAt: new Date().toISOString(), branch, commit: head.stdout.trim() };
+      const commitSha = head.stdout.trim();
+
+      const push = await run(["push", "--set-upstream", "origin", branch], { timeoutMs: 120_000, maxOutputBytes: 128 * 1024 });
+      if (push.exitCode !== 0 || push.timedOut) throw Object.assign(new Error("approved branch could not be pushed to GitHub"), { code: "APPROVAL_PUSH_FAILED" });
+
+      const pullRequest = await this.#githubPrClient.createPullRequest({
+        repositoryUrl: job.repositoryUrl,
+        headBranch: branch,
+        title: makePrTitle(job.task),
+        body: makePrBody(job, commitSha),
+        draft: false
+      });
+
+      const decision = {
+        status: nextApprovalStatus(approval),
+        decidedAt: new Date().toISOString(),
+        published: true,
+        branch,
+        commit: commitSha,
+        pullRequest
+      };
       this.#decisions.set(job.id, decision);
       return { ...job, status: decision.status, approval: decision };
     } finally {
@@ -79,3 +132,5 @@ export class ApprovalService {
     }
   }
 }
+
+export const __test = Object.freeze({ makeCommitMessage, makePrTitle, makePrBody, normalizeDiff });
