@@ -9,6 +9,6 @@
   ],
   "scripts": {
     "test": "node --test packages/core/test/*.test.mjs packages/tools/test/*.test.mjs packages/workspace/test/*.test.mjs packages/git/test/*.test.mjs packages/inspector/test/*.test.mjs packages/model/test/*.test.mjs apps/agent/test/*.test.mjs",
-    "lint": "node --check packages/core/src/*.mjs && node --check packages/tools/src/*.mjs && node --check packages/workspace/src/*.mjs && node --check packages/git/src/*.mjs && node --check packages/inspector/src/*.mjs && node --check packages/model/src/*.mjs && node --check packages/model/test/*.test.mjs && node --check packages/inspector/test/*.test.mjs && node --check apps/agent/src/*.mjs && node --check apps/agent/test/*.test.mjs"
+    "lint": "node --check packages/core/src/*.mjs && node --check packages/core/test/*.test.mjs && node --check packages/tools/src/*.mjs && node --check packages/workspace/src/*.mjs && node --check packages/git/src/*.mjs && node --check packages/inspector/src/*.mjs && node --check packages/inspector/test/*.test.mjs && node --check packages/model/src/*.mjs && node --check packages/model/test/*.test.mjs && node --check apps/agent/src/*.mjs && node --check apps/agent/test/*.test.mjs"
   }
 }
