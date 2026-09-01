@@ -1,0 +1,14 @@
+{
+  "name": "pinaka-agent",
+  "version": "0.1.0",
+  "private": true,
+  "description": "A browser-based coding agent with safe repository inspection, coding, testing, and GitHub workflows.",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "test": "echo \"Tests will be configured in the next phase.\"",
+    "lint": "echo \"Linting will be configured in the next phase.\""
+  }
+}
