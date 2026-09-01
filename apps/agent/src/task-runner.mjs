@@ -78,16 +78,25 @@ export class AgentTaskRunner {
   #workspaceManager;
   #jobs = new Map();
   #routerFactory;
+  #gitFactory;
+  #registryFactory;
+  #agentRunner;
   #githubToken;
 
   constructor({
     workspaceRoot,
     workspaceManager,
     routerFactory = buildDefaultRouter,
+    gitFactory = ({ workspaceRoot: root }) => new GitRepository({ workspaceRoot: root }),
+    registryFactory = ({ workspaceRoot: root, githubToken }) => createToolRegistry({ workspaceRoot: root, githubToken }),
+    agentRunner = runAutonomousRepairLoop,
     githubToken = ""
   } = {}) {
     this.#workspaceManager = workspaceManager || new WorkspaceManager({ rootDirectory: workspaceRoot });
     this.#routerFactory = routerFactory;
+    this.#gitFactory = gitFactory;
+    this.#registryFactory = registryFactory;
+    this.#agentRunner = agentRunner;
     this.#githubToken = githubToken;
   }
 
@@ -142,16 +151,16 @@ export class AgentTaskRunner {
       workspace = await this.#workspaceManager.create(job.id);
 
       this.#update(job, { stage: "clone", message: "Cloning the repository" });
-      const git = new GitRepository({ workspaceRoot: workspace.path });
+      const git = this.#gitFactory({ workspaceRoot: workspace.path });
       await git.clone(job.repositoryUrl);
 
       this.#update(job, { stage: "branch", message: "Creating an isolated agent branch" });
       await git.createBranch(`agent/${job.id}`);
 
       this.#update(job, { stage: "model", message: "Running Pinaka against the repository" });
-      const registry = createToolRegistry({ workspaceRoot: workspace.path, githubToken: this.#githubToken });
+      const registry = this.#registryFactory({ workspaceRoot: workspace.path, githubToken: this.#githubToken });
       const router = this.#routerFactory(modelOptions);
-      const result = await runAutonomousRepairLoop({
+      const result = await this.#agentRunner({
         registry,
         router,
         task: job.task,
