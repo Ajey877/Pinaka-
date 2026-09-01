@@ -1,4 +1,5 @@
 import { GitRepository } from "@pinaka/git";
+import { inspectRepository } from "@pinaka/inspector";
 import {
   GitHubClient,
   ToolRegistry,
@@ -57,6 +58,11 @@ export function createToolRegistry({ workspaceRoot, githubToken = "" } = {}) {
   registry.register("git.assert_clean", {
     description: "Verify that the workspace has no uncommitted changes.",
     run: () => git.assertClean()
+  });
+
+  registry.register("repository.inspect", {
+    description: "Build a bounded structural map of the repository for agent reasoning.",
+    run: ({ maxFiles } = {}) => inspectRepository(workspaceRoot, { maxFiles })
   });
 
   registry.register("github.repository", {
