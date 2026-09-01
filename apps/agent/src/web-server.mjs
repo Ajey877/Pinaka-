@@ -5,7 +5,8 @@ const WEB_ROOT = path.resolve(new URL("../web/", import.meta.url).pathname);
 const ASSETS = Object.freeze({
   "/": { file: "index.html", type: "text/html; charset=utf-8" },
   "/app.css": { file: "app.css", type: "text/css; charset=utf-8" },
-  "/app.js": { file: "app.js", type: "text/javascript; charset=utf-8" }
+  "/app.js": { file: "app.js", type: "text/javascript; charset=utf-8" },
+  "/approval-ui.js": { file: "approval-ui.js", type: "text/javascript; charset=utf-8" }
 });
 
 export async function readWebAsset(pathname) {
@@ -21,11 +22,7 @@ export async function readWebAsset(pathname) {
 export async function sendWebAsset(res, pathname) {
   const asset = await readWebAsset(pathname);
   if (!asset) return false;
-  res.writeHead(200, {
-    "content-type": asset.contentType,
-    "content-length": asset.content.length,
-    "cache-control": pathname === "/" ? "no-cache" : "public, max-age=3600"
-  });
+  res.writeHead(200, { "content-type": asset.contentType, "content-length": asset.content.length, "cache-control": pathname === "/" ? "no-cache" : "public, max-age=3600" });
   res.end(asset.content);
   return true;
 }
