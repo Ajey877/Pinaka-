@@ -1,7 +1,8 @@
 import http from "node:http";
 import { createPlan, getHealth } from "@pinaka/core";
-import { createToolRegistry } from "./tool-runtime.mjs";
 import { sendWebAsset } from "./web-server.mjs";
+import { createToolRegistry } from "./tool-runtime.mjs";
+import { AgentTaskRunner } from "./task-runner.mjs";
 
 const HOST = process.env.HOST || "0.0.0.0";
 const PORT = Number(process.env.PORT || 3000);
@@ -11,12 +12,17 @@ const toolRegistry = createToolRegistry({
   workspaceRoot: WORKSPACE_ROOT,
   githubToken: process.env.GITHUB_TOKEN || ""
 });
+const taskRunner = new AgentTaskRunner({
+  workspaceRoot: process.env.PINAKA_AGENT_WORKSPACE_ROOT || `${WORKSPACE_ROOT}/.pinaka-workspaces`,
+  githubToken: process.env.GITHUB_TOKEN || ""
+});
 
 function sendJson(res, statusCode, payload) {
   const body = JSON.stringify(payload);
   res.writeHead(statusCode, {
     "content-type": "application/json; charset=utf-8",
     "content-length": Buffer.byteLength(body),
+    "cache-control": "no-store",
     "access-control-allow-origin": "*",
     "access-control-allow-headers": "content-type",
     "access-control-allow-methods": "GET,POST,OPTIONS"
@@ -49,6 +55,11 @@ async function readJson(req) {
   }
 }
 
+function extractTaskId(pathname) {
+  const match = pathname.match(/^\/v1\/agent\/tasks\/([A-Za-z0-9][A-Za-z0-9_-]{0,63})$/);
+  return match?.[1] || null;
+}
+
 const server = http.createServer(async (req, res) => {
   if (req.method === "OPTIONS") {
     res.writeHead(204, {
@@ -71,9 +82,7 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (req.method === "GET" && url.pathname === "/v1/tools") {
-      sendJson(res, 200, {
-        tools: toolRegistry.list()
-      });
+      sendJson(res, 200, { tools: toolRegistry.list() });
       return;
     }
 
@@ -83,15 +92,33 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
-    sendJson(res, 404, {
-      error: "not_found",
-      message: "endpoint not found"
-    });
+    if (req.method === "POST" && url.pathname === "/v1/agent/run") {
+      const body = await readJson(req);
+      const job = await taskRunner.start(body);
+      sendJson(res, 202, job);
+      return;
+    }
+
+    if (req.method === "GET" && url.pathname === "/v1/agent/tasks") {
+      sendJson(res, 200, { tasks: taskRunner.list() });
+      return;
+    }
+
+    if (req.method === "GET") {
+      const taskId = extractTaskId(url.pathname);
+      if (taskId) {
+        sendJson(res, 200, taskRunner.get(taskId));
+        return;
+      }
+    }
+
+    sendJson(res, 404, { error: "not_found", message: "endpoint not found" });
   } catch (error) {
     const statusCode = Number.isInteger(error?.statusCode) ? error.statusCode : 400;
     sendJson(res, statusCode, {
       error: statusCode >= 500 ? "internal_error" : "invalid_request",
-      message: error?.message || "request failed"
+      message: error?.message || "request failed",
+      code: error?.code || null
     });
   }
 });
