@@ -28,13 +28,14 @@ test("inspects files, languages, manifests, and package scripts", async () => {
 
   const report = await inspectRepository(root);
 
-  assert.equal(report.fileCount, 4);
+  assert.equal(report.fileCount, 3);
   assert.deepEqual(report.manifests, ["package.json"]);
   assert.deepEqual(report.ecosystems, ["node"]);
   assert.deepEqual(report.languages, { python: 1, typescript: 1 });
   assert.deepEqual(report.scripts, { build: "node build.mjs", test: "node --test" });
   assert.ok(report.files.includes("package.json"));
   assert.ok(report.files.includes("src/index.ts"));
+  assert.ok(report.files.includes("src/nested/helper.py"));
   assert.ok(!report.files.some((file) => file.includes("node_modules")));
   assert.equal(report.truncated, false);
 });
