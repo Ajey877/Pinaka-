@@ -22,13 +22,8 @@ function sendJson(res, statusCode, payload, headers = {}) {
   res.end(body);
 }
 async function readJson(req) {
-  let size = 0;
-  const chunks = [];
-  for await (const chunk of req) {
-    size += chunk.length;
-    if (size > MAX_BODY_BYTES) throw Object.assign(new Error("request body is too large"), { statusCode: 413, code: "BODY_TOO_LARGE" });
-    chunks.push(chunk);
-  }
+  let size = 0; const chunks = [];
+  for await (const chunk of req) { size += chunk.length; if (size > MAX_BODY_BYTES) throw Object.assign(new Error("request body is too large"), { statusCode: 413, code: "BODY_TOO_LARGE" }); chunks.push(chunk); }
   if (size === 0) return {};
   try { return JSON.parse(Buffer.concat(chunks).toString("utf8")); } catch { throw Object.assign(new Error("request body must contain valid JSON"), { statusCode: 400, code: "INVALID_JSON" }); }
 }
@@ -45,23 +40,34 @@ function requireTaskOwner(taskId, session) {
   if (!taskRunner.belongsTo(taskId, session.user.id)) throw Object.assign(new Error("task is not accessible to this GitHub account"), { statusCode: 403, code: "TASK_FORBIDDEN" });
   return job;
 }
-function requireMutationSession(req) { return authService.assertCsrf(req.headers); }
+function assertSameOrigin(req) {
+  const configured = typeof process.env.PINAKA_PUBLIC_ORIGIN === "string" && process.env.PINAKA_PUBLIC_ORIGIN.trim() ? process.env.PINAKA_PUBLIC_ORIGIN.trim().replace(/\/$/, "") : null;
+  const forwardedProto = String(req.headers["x-forwarded-proto"] || "").split(",")[0].trim();
+  const protocol = forwardedProto || (req.socket.encrypted ? "https" : "http");
+  const expected = configured || `${protocol}://${req.headers.host}`;
+  const origin = typeof req.headers.origin === "string" ? req.headers.origin.replace(/\/$/, "") : "";
+  if (origin) {
+    if (origin !== expected) throw Object.assign(new Error("request origin is not allowed"), { statusCode: 403, code: "CSRF_ORIGIN_REJECTED" });
+    return;
+  }
+  const referer = typeof req.headers.referer === "string" ? req.headers.referer : "";
+  if (!referer || !referer.startsWith(`${expected}/`)) throw Object.assign(new Error("request origin could not be verified"), { statusCode: 403, code: "CSRF_ORIGIN_REQUIRED" });
+}
+function requireMutationSession(req) {
+  const session = requireSession(req);
+  const suppliedCsrf = req.headers["x-csrf-token"];
+  if (suppliedCsrf) return authService.assertCsrf(req.headers);
+  assertSameOrigin(req);
+  return session;
+}
 function writeSse(res, event) { res.write(`id: ${event.id}\n`); res.write("event: task\n"); res.write(`data: ${JSON.stringify(event)}\n\n`); }
 function streamTaskEvents(res, taskId) {
   const history = taskRunner.events(taskId);
   res.writeHead(200, { "content-type": "text/event-stream; charset=utf-8", "cache-control": "no-cache, no-store, must-revalidate", "connection": "keep-alive", "x-accel-buffering": "no", "access-control-allow-origin": "*" });
-  res.flushHeaders?.();
-  res.write(": connected\n\n");
-  for (const event of history) writeSse(res, event);
-  const lastEvent = history.at(-1);
-  if (lastEvent && TERMINAL_STATUSES.has(lastEvent.status)) { res.end(); return; }
-  let closed = false;
-  let heartbeat = null;
-  const unsubscribe = taskRunner.subscribe(taskId, (event) => {
-    if (closed) return;
-    writeSse(res, event);
-    if (TERMINAL_STATUSES.has(event.status)) { closed = true; if (heartbeat) clearInterval(heartbeat); unsubscribe(); res.end(); }
-  });
+  res.flushHeaders?.(); res.write(": connected\n\n"); for (const event of history) writeSse(res, event);
+  const lastEvent = history.at(-1); if (lastEvent && TERMINAL_STATUSES.has(lastEvent.status)) { res.end(); return; }
+  let closed = false; let heartbeat = null;
+  const unsubscribe = taskRunner.subscribe(taskId, (event) => { if (closed) return; writeSse(res, event); if (TERMINAL_STATUSES.has(event.status)) { closed = true; if (heartbeat) clearInterval(heartbeat); unsubscribe(); res.end(); } });
   heartbeat = setInterval(() => { if (!closed) res.write(": heartbeat\n\n"); }, 15_000);
   res.on("close", () => { closed = true; if (heartbeat) clearInterval(heartbeat); unsubscribe(); });
 }
@@ -71,53 +77,22 @@ const server = http.createServer(async (req, res) => {
   try {
     const url = new URL(req.url, `http://${req.headers.host || "localhost"}`);
     if (req.method === "GET" && url.pathname === "/auth/github") { res.writeHead(302, { location: authService.begin(), "cache-control": "no-store" }); res.end(); return; }
-    if (req.method === "GET" && url.pathname === "/auth/github/callback") {
-      const result = await authService.callback({ code: url.searchParams.get("code") || "", state: url.searchParams.get("state") || "" });
-      res.writeHead(302, { location: "/?auth=success", "set-cookie": result.setCookies, "cache-control": "no-store" }); res.end(); return;
-    }
+    if (req.method === "GET" && url.pathname === "/auth/github/callback") { const result = await authService.callback({ code: url.searchParams.get("code") || "", state: url.searchParams.get("state") || "" }); res.writeHead(302, { location: "/?auth=success", "set-cookie": result.setCookies, "cache-control": "no-store" }); res.end(); return; }
     if (req.method === "GET" && url.pathname === "/v1/auth/me") { const session = authService.getSession(req.headers); sendJson(res, 200, { authenticated: Boolean(session), user: session?.user || null }); return; }
     if (req.method === "POST" && url.pathname === "/v1/auth/logout") { requireMutationSession(req); sendJson(res, 200, { authenticated: false }, { "set-cookie": authService.logout(req.headers) }); return; }
     if (req.method === "GET" && await sendWebAsset(res, url.pathname)) return;
     if (req.method === "GET" && url.pathname === "/health") { sendJson(res, 200, getHealth()); return; }
     if (req.method === "GET" && url.pathname === "/v1/tools") { sendJson(res, 200, { tools: toolRegistry.list() }); return; }
     if (req.method === "POST" && url.pathname === "/v1/agent/plan") { const body = await readJson(req); sendJson(res, 200, createPlan(body.task)); return; }
-    if (req.method === "POST" && url.pathname === "/v1/agent/run") {
-      const session = requireMutationSession(req);
-      const body = await readJson(req);
-      const job = await taskRunner.start({ ...body, ownerId: session.user.id, githubToken: session.githubToken });
-      sendJson(res, 202, approvalService.decorate(job));
-      return;
-    }
-    if (req.method === "GET" && url.pathname === "/v1/agent/tasks") {
-      const session = requireSession(req);
-      sendJson(res, 200, { tasks: taskRunner.list(session.user.id).map((job) => approvalService.decorate(job)) });
-      return;
-    }
+    if (req.method === "POST" && url.pathname === "/v1/agent/run") { const session = requireMutationSession(req); const body = await readJson(req); const job = await taskRunner.start({ ...body, ownerId: session.user.id, githubToken: session.githubToken }); sendJson(res, 202, approvalService.decorate(job)); return; }
+    if (req.method === "GET" && url.pathname === "/v1/agent/tasks") { const session = requireSession(req); sendJson(res, 200, { tasks: taskRunner.list(session.user.id).map((job) => approvalService.decorate(job)) }); return; }
     if (req.method === "POST") {
       const approvalTaskId = extractApprovalId(url.pathname);
-      if (approvalTaskId) {
-        const session = requireMutationSession(req);
-        const job = requireTaskOwner(approvalTaskId, session);
-        const body = await readJson(req);
-        const updated = await approvalService.decide(job, body.decision, { githubToken: session.githubToken });
-        sendJson(res, 200, updated);
-        return;
-      }
+      if (approvalTaskId) { const session = requireMutationSession(req); const job = requireTaskOwner(approvalTaskId, session); const body = await readJson(req); const updated = await approvalService.decide(job, body.decision, { githubToken: session.githubToken }); sendJson(res, 200, updated); return; }
     }
     if (req.method === "GET") {
-      const eventsTaskId = extractTaskEventsId(url.pathname);
-      if (eventsTaskId) {
-        const session = requireSession(req);
-        requireTaskOwner(eventsTaskId, session);
-        streamTaskEvents(res, eventsTaskId);
-        return;
-      }
-      const taskId = extractTaskId(url.pathname);
-      if (taskId) {
-        const session = requireSession(req);
-        sendJson(res, 200, approvalService.decorate(requireTaskOwner(taskId, session)));
-        return;
-      }
+      const eventsTaskId = extractTaskEventsId(url.pathname); if (eventsTaskId) { const session = requireSession(req); requireTaskOwner(eventsTaskId, session); streamTaskEvents(res, eventsTaskId); return; }
+      const taskId = extractTaskId(url.pathname); if (taskId) { const session = requireSession(req); sendJson(res, 200, approvalService.decorate(requireTaskOwner(taskId, session))); return; }
     }
     sendJson(res, 404, { error: "not_found", message: "endpoint not found" });
   } catch (error) {
@@ -127,5 +102,4 @@ const server = http.createServer(async (req, res) => {
 });
 server.listen(PORT, HOST, () => console.log(`Pinaka agent listening on http://${HOST}:${PORT}`));
 function shutdown(signal) { console.log(`Received ${signal}; shutting down.`); server.close(() => process.exit(0)); }
-process.on("SIGINT", () => shutdown("SIGINT"));
-process.on("SIGTERM", () => shutdown("SIGTERM"));
+process.on("SIGINT", () => shutdown("SIGINT")); process.on("SIGTERM", () => shutdown("SIGTERM"));
