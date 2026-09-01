@@ -7,7 +7,8 @@ const ASSETS = Object.freeze({
   "/app.css": { file: "app.css", type: "text/css; charset=utf-8" },
   "/app.js": { file: "app.js", type: "text/javascript; charset=utf-8" },
   "/approval-ui.js": { file: "approval-ui.js", type: "text/javascript; charset=utf-8" },
-  "/auth-ui.js": { file: "auth-ui.js", type: "text/javascript; charset=utf-8" }
+  "/auth-ui.js": { file: "auth-ui.js", type: "text/javascript; charset=utf-8" },
+  "/history-ui.js": { file: "history-ui.js", type: "text/javascript; charset=utf-8" }
 });
 
 export async function readWebAsset(pathname) {
