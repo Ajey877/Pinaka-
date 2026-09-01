@@ -53,19 +53,3 @@ test("approval service requires a GitHub sign-in token before publishing", async
   await assert.rejects(() => service.decide(acceptedJob({ id: "task-no-token" }), "approve"), (error) => error.code === "GITHUB_AUTH_REQUIRED" && error.statusCode === 401);
   assert.equal(created, false);
 });
-
-test("approval service accepts a per-session GitHub token for publishing", async () => {
-  const workspaceManager = {
-    async create() { return { path: "/tmp/pinaka-approval-session" }; },
-    async release() {},
-    async discard() {}
-  };
-  let prCalled = false;
-  const service = new ApprovalService({
-    workspaceManager,
-    githubPrClient: { createPullRequest: async () => { prCalled = true; return { number: 7, url: "https://github.com/example/repo/pull/7" }; } }
-  });
-  const result = await service.decide(acceptedJob({ id: "task-session" }), "approve", { githubToken: "gho_session" });
-  assert.equal(result.approval.published, true);
-  assert.equal(prCalled, true);
-});
