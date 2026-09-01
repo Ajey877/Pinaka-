@@ -9,7 +9,7 @@ const TASK_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
 const MAX_REPOSITORY_URL = 2_048;
 const MAX_TASK_CHARS = 20_000;
 const MAX_JOBS = 64;
-const MAX_EVENTS_PER_TASK = 64;
+const MAX_EVENTS_PER_TASK = 128;
 
 function validateText(value, name, maxLength) {
   if (typeof value !== "string" || value.trim() === "" || value.length > maxLength) {
@@ -91,7 +91,7 @@ export class AgentTaskRunner {
     workspaceManager,
     routerFactory = buildDefaultRouter,
     gitFactory = ({ workspaceRoot: root }) => new GitRepository({ workspaceRoot: root }),
-    registryFactory = ({ workspaceRoot: root, githubToken }) => createToolRegistry({ workspaceRoot: root, githubToken }),
+    registryFactory = ({ workspaceRoot: root, githubToken, onToolEvent }) => createToolRegistry({ workspaceRoot: root, githubToken, onToolEvent }),
     agentRunner = runAutonomousRepairLoop,
     githubToken = ""
   } = {}) {
@@ -178,11 +178,12 @@ export class AgentTaskRunner {
     return { ...job };
   }
 
-  #emit(job, stage, message, data = {}) {
+  #emit(job, type, message, data = {}) {
     const event = Object.freeze({
       id: crypto.randomUUID(),
       taskId: job.id,
-      stage,
+      type,
+      stage: job.stage,
       message,
       status: job.status,
       timestamp: new Date().toISOString(),
@@ -205,7 +206,23 @@ export class AgentTaskRunner {
 
   #update(job, patch) {
     Object.assign(job, patch, { updatedAt: new Date().toISOString() });
-    this.#emit(job, job.stage, job.message);
+    this.#emit(job, "task.stage", job.message);
+  }
+
+  #emitCoreEvent(job, event) {
+    if (!event || typeof event !== "object") return;
+    const type = typeof event.type === "string" ? event.type : "agent.event";
+    const messageByType = {
+      "verification.start": "Running repository verification",
+      "verification.complete": event.passed ? "Verification passed" : "Verification failed",
+      "review.start": "Starting final code review",
+      "review.complete": event.accepted ? "Final review approved" : "Final review rejected",
+      "repair.start": `Starting repair attempt ${event.attempt || ""}`.trim(),
+      "repair.complete": `Repair attempt ${event.attempt || ""} complete`.trim(),
+      "task.unverified": "Repository has no detectable verification checks",
+      "task.failed": "Task exhausted its repair budget"
+    };
+    this.#emit(job, type, messageByType[type] || type.replaceAll(".", " "), { ...event });
   }
 
   async #run(job, modelOptions) {
@@ -222,19 +239,27 @@ export class AgentTaskRunner {
       await git.createBranch(`agent/${job.id}`);
 
       this.#update(job, { stage: "model", message: "Running Pinaka against the repository" });
-      const registry = this.#registryFactory({ workspaceRoot: workspace.path, githubToken: this.#githubToken });
+      const registry = this.#registryFactory({
+        workspaceRoot: workspace.path,
+        githubToken: this.#githubToken,
+        onToolEvent: (event) => {
+          const label = event.type === "tool.start" ? `Running ${event.tool}` : event.ok ? `Finished ${event.tool}` : `Failed ${event.tool}`;
+          this.#emit(job, event.type, label, event);
+        }
+      });
       const router = this.#routerFactory(modelOptions);
       const result = await this.#agentRunner({
         registry,
         router,
         task: job.task,
-        provider: "default"
+        provider: "default",
+        onEvent: (event) => this.#emitCoreEvent(job, event)
       });
 
       this.#update(job, {
-        status: result.status === "passed" || result.status === "repaired" ? "completed" : "needs_attention",
+        status: result.status === "passed" || result.status === "repaired" || result.status === "accepted" ? "completed" : "needs_attention",
         stage: "complete",
-        message: result.status === "repaired" ? "Task repaired and verified" : result.status === "passed" ? "Task verified" : "Task finished without full verification",
+        message: result.status === "repaired" ? "Task repaired and verified" : result.status === "passed" || result.status === "accepted" ? "Task verified" : "Task finished without full verification",
         result
       });
     } catch (error) {
