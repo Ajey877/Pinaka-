@@ -23,6 +23,16 @@ function validateRepositoryUrl(repositoryUrl) {
   return repositoryUrl.trim().replace(/\/+$/, "");
 }
 
+function buildGitAuthEnvironment(githubToken) {
+  if (typeof githubToken !== "string" || githubToken.trim() === "") return {};
+  return {
+    GIT_TERMINAL_PROMPT: "0",
+    GIT_CONFIG_COUNT: "1",
+    GIT_CONFIG_KEY_0: "http.extraHeader",
+    GIT_CONFIG_VALUE_0: `Authorization: Bearer ${githubToken.trim()}`
+  };
+}
+
 function requireSuccess(result, operation) {
   if (result.timedOut) {
     throw new GitOperationError(`${operation} timed out`, "GIT_COMMAND_TIMEOUT", {
@@ -125,7 +135,7 @@ export class GitRepository {
     };
   }
 
-  async clone(repositoryUrl) {
+  async clone(repositoryUrl, { githubToken = "" } = {}) {
     const source = validateRepositoryUrl(repositoryUrl);
     let status;
     try {
@@ -144,7 +154,8 @@ export class GitRepository {
       executable: "git",
       args: ["clone", "--no-recurse-submodules", "--depth", "1", source, "."],
       timeoutMs: 120_000,
-      maxOutputBytes: MAX_COMMAND_OUTPUT_BYTES
+      maxOutputBytes: MAX_COMMAND_OUTPUT_BYTES,
+      environment: buildGitAuthEnvironment(githubToken)
     });
     requireSuccess(result, "git clone");
 
@@ -176,3 +187,5 @@ export class GitRepository {
     return status;
   }
 }
+
+export const __test = Object.freeze({ buildGitAuthEnvironment });
