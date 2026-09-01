@@ -7,6 +7,7 @@
     ".": "./src/index.mjs"
   },
   "dependencies": {
-    "@pinaka/model": "0.1.0"
+    "@pinaka/model": "0.1.0",
+    "@pinaka/review": "0.1.0"
   }
 }
