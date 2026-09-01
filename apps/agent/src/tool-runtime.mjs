@@ -1,6 +1,9 @@
 import { GitRepository } from "@pinaka/git";
 import { inspectRepository } from "@pinaka/inspector";
-import { assertChangesSafe } from "@pinaka/verification";
+import {
+  assertChangesSafe,
+  runVerificationChecks
+} from "@pinaka/verification";
 import {
   GitHubClient,
   ToolRegistry,
@@ -70,6 +73,16 @@ export function createToolRegistry({ workspaceRoot, githubToken = "" } = {}) {
     description: "Check a proposed change set against Pinaka safety budgets and protected paths.",
     run: ({ changes, maxChangedFiles, maxAddedLines, maxDeletedLines, maxFileBytes } = {}) =>
       assertChangesSafe(changes, { maxChangedFiles, maxAddedLines, maxDeletedLines, maxFileBytes })
+  });
+
+  registry.register("verification.run_checks", {
+    description: "Run repository-discovered tests, lint, type checks, and build checks safely in the workspace.",
+    run: async ({ inspection, timeoutMs, continueOnFailure = false } = {}) => runVerificationChecks({
+      inspection,
+      execute: (command) => runCommand({ workspaceRoot, ...command }),
+      timeoutMs,
+      continueOnFailure
+    })
   });
 
   registry.register("github.repository", {
