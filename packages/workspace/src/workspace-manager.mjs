@@ -23,13 +23,10 @@ function validateRootDirectory(rootDirectory) {
   return path.resolve(rootDirectory);
 }
 
-function createWorkspaceId() {
-  return crypto.randomUUID();
-}
-
 export class WorkspaceManager {
   #rootDirectory;
   #workspaces = new Map();
+  #creating = new Set();
 
   constructor({ rootDirectory = DEFAULT_ROOT_DIRECTORY } = {}) {
     this.#rootDirectory = validateRootDirectory(rootDirectory);
@@ -46,23 +43,31 @@ export class WorkspaceManager {
 
   async create(taskId) {
     validateTaskId(taskId);
-    if (this.#workspaces.has(taskId)) {
+    if (this.#workspaces.has(taskId) || this.#creating.has(taskId)) {
       throw new WorkspaceError(`workspace already exists for task: ${taskId}`, "WORKSPACE_EXISTS");
     }
 
-    await this.initialize();
-    const workspaceId = createWorkspaceId();
-    const workspacePath = path.join(this.#rootDirectory, `${taskId}-${workspaceId}`);
-    await fs.mkdir(workspacePath, { recursive: false });
+    this.#creating.add(taskId);
+    try {
+      await this.initialize();
+      const workspaceId = crypto.randomUUID();
+      const workspacePath = path.join(this.#rootDirectory, `${taskId}-${workspaceId}`);
+      await fs.mkdir(workspacePath, { recursive: false });
 
-    const record = Object.freeze({
-      id: workspaceId,
-      taskId,
-      path: workspacePath,
-      status: "active"
-    });
-    this.#workspaces.set(taskId, record);
-    return record;
+      const record = Object.freeze({
+        id: workspaceId,
+        taskId,
+        path: workspacePath,
+        status: "active"
+      });
+      this.#workspaces.set(taskId, record);
+      return record;
+    } catch (error) {
+      if (error instanceof WorkspaceError) throw error;
+      throw new WorkspaceError(`failed to create workspace: ${error.message}`, "CREATE_FAILED");
+    } finally {
+      this.#creating.delete(taskId);
+    }
   }
 
   get(taskId) {
