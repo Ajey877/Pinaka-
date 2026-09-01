@@ -1,9 +1,15 @@
 import http from "node:http";
 import { createPlan, getHealth } from "@pinaka/core";
+import { createToolRegistry } from "./tool-runtime.mjs";
 
 const HOST = process.env.HOST || "0.0.0.0";
 const PORT = Number(process.env.PORT || 3000);
 const MAX_BODY_BYTES = 256 * 1024;
+const WORKSPACE_ROOT = process.env.PINAKA_WORKSPACE_ROOT || process.cwd();
+const toolRegistry = createToolRegistry({
+  workspaceRoot: WORKSPACE_ROOT,
+  githubToken: process.env.GITHUB_TOKEN || ""
+});
 
 function sendJson(res, statusCode, payload) {
   const body = JSON.stringify(payload);
@@ -58,6 +64,13 @@ const server = http.createServer(async (req, res) => {
 
     if (req.method === "GET" && url.pathname === "/health") {
       sendJson(res, 200, getHealth());
+      return;
+    }
+
+    if (req.method === "GET" && url.pathname === "/v1/tools") {
+      sendJson(res, 200, {
+        tools: toolRegistry.list()
+      });
       return;
     }
 
