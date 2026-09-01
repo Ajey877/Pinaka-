@@ -11,7 +11,7 @@ const MAX_BODY_BYTES = 256 * 1024;
 const WORKSPACE_ROOT = process.env.PINAKA_WORKSPACE_ROOT || process.cwd();
 const toolRegistry = createToolRegistry({ workspaceRoot: WORKSPACE_ROOT, githubToken: process.env.GITHUB_TOKEN || "" });
 const taskRunner = new AgentTaskRunner({ workspaceRoot: process.env.PINAKA_AGENT_WORKSPACE_ROOT || `${WORKSPACE_ROOT}/.pinaka-workspaces`, githubToken: process.env.GITHUB_TOKEN || "" });
-const approvalService = new ApprovalService({ workspaceRoot: `${WORKSPACE_ROOT}/.pinaka-approvals` });
+const approvalService = new ApprovalService({ workspaceRoot: `${WORKSPACE_ROOT}/.pinaka-approvals`, githubToken: process.env.GITHUB_TOKEN || "" });
 const TERMINAL_STATUSES = new Set(["completed", "needs_attention", "failed"]);
 
 function sendJson(res, statusCode, payload) {
