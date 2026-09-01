@@ -4,6 +4,7 @@ import { runCommand } from "@pinaka/tools";
 const BRANCH_PATTERN = /^(?![./-])(?!.*(?:\.\.|\\|\s|~|\^|:|\?|\*|\[|@\{|\.lock$))[A-Za-z0-9._/-]{1,240}$/;
 const GITHUB_HTTPS_REPO = /^https:\/\/github\.com\/[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+(?:\.git)?\/?$/i;
 const MAX_COMMAND_OUTPUT_BYTES = 512 * 1024;
+const MAX_DIFF_BYTES = 512 * 1024;
 
 function validateBranchName(branchName) {
   if (typeof branchName !== "string" || !BRANCH_PATTERN.test(branchName)) {
@@ -97,6 +98,31 @@ export class GitRepository {
     });
     requireSuccess(result, "git rev-parse");
     return result.stdout.trim();
+  }
+
+  async diff({ staged = false, maxOutputBytes = MAX_DIFF_BYTES } = {}) {
+    if (typeof staged !== "boolean") {
+      throw new GitOperationError("staged must be boolean", "INVALID_DIFF_OPTION");
+    }
+    if (!Number.isInteger(maxOutputBytes) || maxOutputBytes < 1 || maxOutputBytes > MAX_DIFF_BYTES) {
+      throw new GitOperationError("maxOutputBytes is invalid", "INVALID_DIFF_OPTION");
+    }
+
+    const args = staged
+      ? ["diff", "--cached", "--no-ext-diff", "--unified=3", "--no-color"]
+      : ["diff", "--no-ext-diff", "--unified=3", "--no-color"];
+    const result = await runCommand({
+      workspaceRoot: this.#workspaceRoot,
+      executable: "git",
+      args,
+      maxOutputBytes
+    });
+    requireSuccess(result, "git diff");
+    return {
+      staged,
+      text: result.stdout,
+      truncated: result.outputTruncated === true
+    };
   }
 
   async clone(repositoryUrl) {
