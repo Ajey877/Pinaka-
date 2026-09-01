@@ -11,6 +11,7 @@
     "@pinaka/tools": "0.1.0",
     "@pinaka/git": "0.1.0",
     "@pinaka/inspector": "0.1.0",
-    "@pinaka/model": "0.1.0"
+    "@pinaka/model": "0.1.0",
+    "@pinaka/verification": "0.1.0"
   }
 }
