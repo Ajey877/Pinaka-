@@ -1,4 +1,5 @@
 import { ToolError } from "./errors.mjs";
+import { getToolSchema } from "./tool-schema.mjs";
 
 export class ToolRegistry {
   #tools = new Map();
@@ -17,6 +18,7 @@ export class ToolRegistry {
     this.#tools.set(name, Object.freeze({
       name,
       description: typeof definition.description === "string" ? definition.description : "",
+      schema: definition.schema || getToolSchema(name),
       run: definition.run
     }));
     return this;
@@ -34,6 +36,17 @@ export class ToolRegistry {
 
   list() {
     return [...this.#tools.values()].map(({ name, description }) => ({ name, description }));
+  }
+
+  definitions() {
+    return [...this.#tools.values()].map(({ name, description, schema }) => ({
+      type: "function",
+      function: {
+        name,
+        description,
+        parameters: schema
+      }
+    }));
   }
 
   async execute(name, input) {
