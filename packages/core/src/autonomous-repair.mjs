@@ -1,6 +1,7 @@
 import { ModelError } from "@pinaka/model";
 import { normalizeTask } from "./agent-core.mjs";
 import { runCodingTask } from "./coding-workflow.mjs";
+import { runFinalReview } from "./final-review.mjs";
 import { runToolCallingLoop } from "./tool-loop.mjs";
 
 const DEFAULT_MAX_REPAIR_ATTEMPTS = 3;
@@ -79,9 +80,26 @@ async function runVerification(registry, inspection, timeoutMs) {
   }));
 }
 
+async function finishWithReview({ registry, router, reviewRouter, task, codingResult, verification, signal }) {
+  const review = await runFinalReview({
+    registry,
+    router: reviewRouter || router,
+    task,
+    verification,
+    signal
+  });
+  return {
+    ...codingResult,
+    verification,
+    finalReview: review,
+    status: review.accepted ? "accepted" : "review_rejected"
+  };
+}
+
 export async function runAutonomousRepairLoop({
   registry,
   router,
+  reviewRouter,
   task,
   provider,
   maxOutputTokens,
@@ -93,6 +111,7 @@ export async function runAutonomousRepairLoop({
 } = {}) {
   const safeRegistry = validateRegistry(registry);
   const safeRouter = validateRouter(router);
+  if (reviewRouter !== undefined) validateRouter(reviewRouter);
   const safeTask = normalizeTask(task);
   const repairAttempts = validateRepairAttempts(maxRepairAttempts);
 
@@ -124,12 +143,15 @@ export async function runAutonomousRepairLoop({
   }
 
   if (verification.passed) {
-    return {
-      ...codingResult,
+    return finishWithReview({
+      registry: safeRegistry,
+      router: safeRouter,
+      reviewRouter,
+      task: safeTask,
+      codingResult: { ...codingResult, repairAttempts: attempts },
       verification,
-      repairAttempts: attempts,
-      status: "passed"
-    };
+      signal
+    });
   }
 
   for (let attempt = 1; attempt <= repairAttempts; attempt += 1) {
@@ -157,12 +179,15 @@ export async function runAutonomousRepairLoop({
     });
 
     if (verification.passed) {
-      return {
-        ...codingResult,
+      return finishWithReview({
+        registry: safeRegistry,
+        router: safeRouter,
+        reviewRouter,
+        task: safeTask,
+        codingResult: { ...codingResult, repairAttempts: attempts },
         verification,
-        repairAttempts: attempts,
-        status: "repaired"
-      };
+        signal
+      });
     }
   }
 
