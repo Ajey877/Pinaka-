@@ -1,5 +1,6 @@
 import { GitRepository } from "@pinaka/git";
 import { inspectRepository } from "@pinaka/inspector";
+import { assertChangesSafe } from "@pinaka/verification";
 import {
   GitHubClient,
   ToolRegistry,
@@ -63,6 +64,12 @@ export function createToolRegistry({ workspaceRoot, githubToken = "" } = {}) {
   registry.register("repository.inspect", {
     description: "Build a bounded structural map of the repository for agent reasoning.",
     run: ({ maxFiles } = {}) => inspectRepository(workspaceRoot, { maxFiles })
+  });
+
+  registry.register("verification.check_changes", {
+    description: "Check a proposed change set against Pinaka safety budgets and protected paths.",
+    run: ({ changes, maxChangedFiles, maxAddedLines, maxDeletedLines, maxFileBytes } = {}) =>
+      assertChangesSafe(changes, { maxChangedFiles, maxAddedLines, maxDeletedLines, maxFileBytes })
   });
 
   registry.register("github.repository", {
