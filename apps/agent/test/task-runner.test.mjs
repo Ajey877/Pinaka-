@@ -24,6 +24,15 @@ function makeWorkspaceManager() {
   };
 }
 
+async function waitForStatus(runner, taskId, expected, attempts = 50) {
+  for (let index = 0; index < attempts; index += 1) {
+    const current = runner.get(taskId);
+    if (current.status === expected) return current;
+    await new Promise((resolve) => setTimeout(resolve, 2));
+  }
+  assert.fail(`task ${taskId} did not reach ${expected} status`);
+}
+
 test("task runner validates repository and task input", async () => {
   const runner = new AgentTaskRunner({
     workspaceManager: makeWorkspaceManager(),
@@ -64,16 +73,8 @@ test("task runner executes the workspace lifecycle and returns completion status
   });
 
   assert.equal(created.status, "queued");
-
-  for (let index = 0; index < 20; index += 1) {
-    const current = runner.get("task-123");
-    if (current.status !== "queued" && current.status !== "running") {
-      assert.equal(current.status, "completed");
-      assert.equal(current.result.status, "passed");
-      break;
-    }
-    await new Promise((resolve) => setTimeout(resolve, 1));
-  }
+  const current = await waitForStatus(runner, "task-123", "completed");
+  assert.equal(current.result.status, "passed");
 
   assert.deepEqual(events, [
     ["clone", "/tmp/task-123", "https://github.com/example/repo"],
@@ -100,15 +101,7 @@ test("task runner retains a useful failure result when execution fails", async (
     taskId: "task-fail"
   });
 
-  for (let index = 0; index < 20; index += 1) {
-    const current = runner.get("task-fail");
-    if (current.status === "failed") {
-      assert.equal(current.error.code, "GIT_COMMAND_FAILED");
-      assert.equal(workspaceManager.active.size, 0);
-      return;
-    }
-    await new Promise((resolve) => setTimeout(resolve, 1));
-  }
-
-  assert.fail("task did not reach failed state");
+  const current = await waitForStatus(runner, "task-fail", "failed");
+  assert.equal(current.error.code, "GIT_COMMAND_FAILED");
+  assert.equal(workspaceManager.active.size, 0);
 });
