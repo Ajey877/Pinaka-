@@ -10,6 +10,7 @@ const MAX_REPOSITORY_URL = 2_048;
 const MAX_TASK_CHARS = 20_000;
 const MAX_JOBS = 64;
 const MAX_EVENTS_PER_TASK = 128;
+const MAX_RETAINED_DIFF_CHARS = 120_000;
 
 function validateText(value, name, maxLength) {
   if (typeof value !== "string" || value.trim() === "" || value.length > maxLength) {
@@ -279,11 +280,29 @@ export class AgentTaskRunner {
         onEvent: (event) => this.#emitCoreEvent(job, event)
       });
 
+      let diff = null;
+      try {
+        const diffResult = await git.diff({ staged: false, maxOutputBytes: MAX_RETAINED_DIFF_CHARS });
+        if (diffResult && typeof diffResult === "object") {
+          const text = typeof diffResult.text === "string" ? diffResult.text : "";
+          diff = {
+            text,
+            truncated: diffResult.truncated === true,
+            changeCount: Number.isInteger(result?.finalReview?.diff?.changeCount) ? result.finalReview.diff.changeCount : null
+          };
+        }
+      } catch (error) {
+        this.#emit(job, "diff.error", "Unable to capture the final diff", {
+          errorCode: typeof error?.code === "string" ? error.code.slice(0, 128) : "DIFF_CAPTURE_FAILED"
+        });
+      }
+
+      const finalResult = diff ? { ...result, diff } : result;
       this.#update(job, {
         status: result.status === "passed" || result.status === "repaired" || result.status === "accepted" ? "completed" : "needs_attention",
         stage: "complete",
         message: result.status === "repaired" ? "Task repaired and verified" : result.status === "passed" || result.status === "accepted" ? "Task verified" : "Task finished without full verification",
-        result
+        result: finalResult
       });
     } catch (error) {
       this.#update(job, {
