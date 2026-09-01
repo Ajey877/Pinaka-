@@ -1,0 +1,12 @@
+{
+  "name": "@pinaka/inspector",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.mjs"
+  },
+  "dependencies": {
+    "@pinaka/tools": "0.1.0"
+  }
+}
