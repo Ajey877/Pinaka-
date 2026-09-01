@@ -9,6 +9,7 @@ const TASK_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
 const MAX_REPOSITORY_URL = 2_048;
 const MAX_TASK_CHARS = 20_000;
 const MAX_JOBS = 64;
+const MAX_EVENTS_PER_TASK = 64;
 
 function validateText(value, name, maxLength) {
   if (typeof value !== "string" || value.trim() === "" || value.length > maxLength) {
@@ -77,6 +78,7 @@ function makeJob(taskId, repositoryUrl, task) {
 export class AgentTaskRunner {
   #workspaceManager;
   #jobs = new Map();
+  #events = new Map();
   #routerFactory;
   #gitFactory;
   #registryFactory;
@@ -116,6 +118,39 @@ export class AgentTaskRunner {
     return { ...job };
   }
 
+  subscribe(taskId, listener) {
+    validateTaskId(taskId);
+    if (!this.#jobs.has(taskId)) {
+      const error = new Error("task not found");
+      error.statusCode = 404;
+      error.code = "TASK_NOT_FOUND";
+      throw error;
+    }
+    if (typeof listener !== "function") throw new TypeError("event listener must be a function");
+
+    let listeners = this.#events.get(taskId);
+    if (!listeners) {
+      listeners = new Set();
+      this.#events.set(taskId, listeners);
+    }
+    listeners.add(listener);
+    return () => {
+      listeners.delete(listener);
+      if (listeners.size === 0) this.#events.delete(taskId);
+    };
+  }
+
+  events(taskId) {
+    validateTaskId(taskId);
+    if (!this.#jobs.has(taskId)) {
+      const error = new Error("task not found");
+      error.statusCode = 404;
+      error.code = "TASK_NOT_FOUND";
+      throw error;
+    }
+    return [...(this.#jobEvents(taskId))];
+  }
+
   async start({ repositoryUrl, task, taskId = crypto.randomUUID().replaceAll("-", "").slice(0, 20), model, apiKey, baseUrl } = {}) {
     const safeRepositoryUrl = validateRepositoryUrl(repositoryUrl);
     const safeTask = validateText(task, "task", MAX_TASK_CHARS);
@@ -136,12 +171,43 @@ export class AgentTaskRunner {
 
     const job = makeJob(taskId, safeRepositoryUrl, safeTask);
     this.#jobs.set(taskId, job);
+    this.#events.set(taskId, []);
+    this.#emit(job, "queued", "Task queued");
     void this.#run(job, { model, apiKey, baseUrl });
     return { ...job };
   }
 
+  #jobEvents(taskId) {
+    const events = this.#events.get(taskId);
+    if (Array.isArray(events)) return events;
+    return [];
+  }
+
+  #emit(job, stage, message, data = {}) {
+    const event = Object.freeze({
+      id: crypto.randomUUID(),
+      taskId: job.id,
+      stage,
+      message,
+      status: job.status,
+      timestamp: new Date().toISOString(),
+      data: data && typeof data === "object" ? { ...data } : {}
+    });
+    const events = this.#jobEvents(job.id);
+    if (events.length >= MAX_EVENTS_PER_TASK) events.shift();
+    events.push(event);
+    for (const listener of this.#events.get(job.id) instanceof Set ? this.#events.get(job.id) : []) {
+      try {
+        listener(event);
+      } catch {
+        // A disconnected event consumer must never affect task execution.
+      }
+    }
+  }
+
   #update(job, patch) {
     Object.assign(job, patch, { updatedAt: new Date().toISOString() });
+    this.#emit(job, job.stage, job.message);
   }
 
   async #run(job, modelOptions) {
