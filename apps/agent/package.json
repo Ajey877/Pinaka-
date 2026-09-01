@@ -8,6 +8,7 @@
   },
   "dependencies": {
     "@pinaka/core": "0.1.0",
-    "@pinaka/tools": "0.1.0"
+    "@pinaka/tools": "0.1.0",
+    "@pinaka/git": "0.1.0"
   }
 }
