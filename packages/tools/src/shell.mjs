@@ -29,6 +29,8 @@ const WINDOWS_COMMAND_FILES = new Map([
   ["pnpm", "pnpm.cmd"],
   ["yarn", "yarn.cmd"]
 ]);
+const MAX_ENV_KEYS = 8;
+const MAX_ENV_VALUE_LENGTH = 8_192;
 
 function validateExecutable(executable, allowedExecutables) {
   if (typeof executable !== "string" || executable.trim() === "") {
@@ -53,7 +55,18 @@ function validateArgs(executable, args) {
   }
 }
 
-function buildChildEnvironment() {
+function buildChildEnvironment(overrides = {}) {
+  if (!overrides || typeof overrides !== "object" || Array.isArray(overrides)) {
+    throw new ToolError("environment must be an object", "INVALID_ARGUMENT");
+  }
+  const entries = Object.entries(overrides);
+  if (entries.length > MAX_ENV_KEYS) throw new ToolError("too many environment overrides", "INVALID_ARGUMENT");
+  for (const [key, value] of entries) {
+    if (!/^[A-Z_][A-Z0-9_]*$/i.test(key) || typeof value !== "string" || value.length > MAX_ENV_VALUE_LENGTH) {
+      throw new ToolError("invalid environment override", "INVALID_ARGUMENT");
+    }
+  }
+
   const safeKeys = [
     "PATH",
     "HOME",
@@ -63,14 +76,16 @@ function buildChildEnvironment() {
     "TMP",
     "TMPDIR",
     "PATHEXT",
-    "ComSpec",
     "NODE_PATH",
     "CI"
   ];
-  return Object.fromEntries(
-    safeKeys
-      .filter((key) => typeof process.env[key] === "string")
-      .map((key) => [key, process.env[key]])
+  return Object.assign(
+    Object.fromEntries(
+      safeKeys
+        .filter((key) => typeof process.env[key] === "string")
+        .map((key) => [key, process.env[key]])
+    ),
+    overrides
   );
 }
 
@@ -81,7 +96,8 @@ export async function runCommand({
   cwd = ".",
   timeoutMs = DEFAULT_TIMEOUT_MS,
   maxOutputBytes = DEFAULT_MAX_OUTPUT_BYTES,
-  allowedExecutables = DEFAULT_ALLOWED_EXECUTABLES
+  allowedExecutables = DEFAULT_ALLOWED_EXECUTABLES,
+  environment = {}
 }) {
   if (!Number.isInteger(timeoutMs) || timeoutMs <= 0) {
     throw new ToolError("timeoutMs must be a positive integer", "INVALID_ARGUMENT");
@@ -103,7 +119,7 @@ export async function runCommand({
       cwd: workingDirectory,
       shell: false,
       windowsHide: true,
-      env: buildChildEnvironment()
+      env: buildChildEnvironment(environment)
     });
 
     let stdout = "";
