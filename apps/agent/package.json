@@ -1,0 +1,12 @@
+{
+  "name": "@pinaka/agent",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node src/server.mjs"
+  },
+  "dependencies": {
+    "@pinaka/core": "0.1.0"
+  }
+}
