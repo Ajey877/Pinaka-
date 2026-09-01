@@ -27,6 +27,7 @@ test("agent runtime exposes the protected Git workflow tools", async () => {
   assert.ok(names.includes("git.clone"));
   assert.ok(names.includes("git.create_branch"));
   assert.ok(names.includes("git.assert_clean"));
+  assert.ok(names.includes("verification.check_changes"));
 
   const result = await registry.execute("terminal.run", {
     executable: "git",
@@ -34,4 +35,30 @@ test("agent runtime exposes the protected Git workflow tools", async () => {
   });
   assert.equal(result.exitCode, 0);
   assert.match(result.stdout, /^git version /);
+});
+
+test("agent runtime rejects unsafe change sets before approval", async () => {
+  const root = await makeRoot();
+  const registry = createToolRegistry({ workspaceRoot: root });
+
+  await assert.rejects(
+    () => registry.execute("verification.check_changes", {
+      changes: [{ path: ".env", status: "modified", additions: 1 }]
+    }),
+    (error) => error?.code === "CHANGES_REJECTED"
+  );
+});
+
+test("agent runtime allows a normal bounded change set", async () => {
+  const root = await makeRoot();
+  const registry = createToolRegistry({ workspaceRoot: root });
+
+  const result = await registry.execute("verification.check_changes", {
+    changes: [{ path: "src/app.mjs", status: "modified", additions: 8, deletions: 2, bytes: 2048 }]
+  });
+
+  assert.equal(result.allowed, true);
+  assert.equal(result.changedFiles, 1);
+  assert.equal(result.additions, 8);
+  assert.equal(result.deletions, 2);
 });
