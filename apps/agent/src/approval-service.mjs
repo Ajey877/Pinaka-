@@ -14,14 +14,12 @@ function validateJob(job) {
   if (job.task.length > MAX_TASK_CHARS) throw Object.assign(new Error("task is too large for approval"), { code: "INVALID_JOB" });
   return job;
 }
-
 function normalizeDiff(job) {
   const diff = job.result?.diff;
   if (!diff || typeof diff.text !== "string" || diff.text.length === 0) throw Object.assign(new Error("no retained diff is available for approval"), { code: "NO_DIFF" });
   if (diff.text.length > MAX_DIFF_CHARS || diff.truncated === true) throw Object.assign(new Error("retained diff is truncated and cannot be approved"), { code: "DIFF_TRUNCATED" });
   return diff.text;
 }
-
 function makeCommitMessage(task) {
   const compact = task.replace(/\s+/g, " ").trim().replace(/[\r\n]/g, " ");
   const suffix = " [Pinaka]";
@@ -31,11 +29,9 @@ function makeCommitMessage(task) {
 export class ApprovalService {
   #workspaceManager;
   #decisions = new Map();
-
   constructor({ workspaceRoot, workspaceManager } = {}) {
     this.#workspaceManager = workspaceManager || new WorkspaceManager({ rootDirectory: workspaceRoot });
   }
-
   decorate(job) {
     validateJob(job);
     const decision = this.#decisions.get(job.id);
@@ -43,18 +39,15 @@ export class ApprovalService {
     if (canDecideApproval(job, "approve")) return { ...job, approval: { status: "pending", actions: ["approve", "reject"] } };
     return { ...job, approval: null };
   }
-
   async decide(job, approval) {
     validateJob(job);
     if (!canDecideApproval(job, approval)) throw Object.assign(new Error("task is not awaiting a valid approval decision"), { code: "APPROVAL_NOT_ALLOWED", statusCode: 409 });
     if (this.#decisions.has(job.id)) throw Object.assign(new Error("approval decision already recorded"), { code: "APPROVAL_ALREADY_DECIDED", statusCode: 409 });
-
     if (approval === "reject") {
       const decision = { status: nextApprovalStatus(approval), decidedAt: new Date().toISOString() };
       this.#decisions.set(job.id, decision);
       return { ...job, status: decision.status, approval: decision };
     }
-
     const diff = normalizeDiff(job);
     const workspace = await this.#workspaceManager.create(`approval-${job.id}`);
     try {
@@ -64,11 +57,13 @@ export class ApprovalService {
       const branch = `agent/${job.id}`;
       const branchResult = await run(["switch", "-c", branch]);
       if (branchResult.exitCode !== 0) throw Object.assign(new Error("approval branch creation failed"), { code: "APPROVAL_BRANCH_FAILED" });
-      await fs.writeFile(path.join(workspace.path, ".pinaka-approval.patch"), diff, "utf8");
+      const patchPath = path.join(workspace.path, ".pinaka-approval.patch");
+      await fs.writeFile(patchPath, diff, "utf8");
       const check = await run(["apply", "--check", ".pinaka-approval.patch"]);
       if (check.exitCode !== 0) throw Object.assign(new Error("approved diff no longer applies cleanly to the repository"), { code: "APPROVAL_DIFF_CONFLICT" });
       const apply = await run(["apply", ".pinaka-approval.patch"]);
       if (apply.exitCode !== 0) throw Object.assign(new Error("approved diff could not be applied"), { code: "APPROVAL_DIFF_APPLY_FAILED" });
+      await fs.rm(patchPath, { force: true });
       const add = await run(["add", "-A"]);
       if (add.exitCode !== 0) throw Object.assign(new Error("approved changes could not be staged"), { code: "APPROVAL_STAGE_FAILED" });
       const commit = await run(["-c", "user.name=Pinaka", "-c", "user.email=pinaka@localhost", "commit", "-m", makeCommitMessage(job.task)], { maxOutputBytes: 128 * 1024 });
