@@ -1,6 +1,7 @@
 import http from "node:http";
 import { createPlan, getHealth } from "@pinaka/core";
 import { createToolRegistry } from "./tool-runtime.mjs";
+import { sendWebAsset } from "./web-server.mjs";
 
 const HOST = process.env.HOST || "0.0.0.0";
 const PORT = Number(process.env.PORT || 3000);
@@ -61,6 +62,8 @@ const server = http.createServer(async (req, res) => {
 
   try {
     const url = new URL(req.url, `http://${req.headers.host || "localhost"}`);
+
+    if (req.method === "GET" && await sendWebAsset(res, url.pathname)) return;
 
     if (req.method === "GET" && url.pathname === "/health") {
       sendJson(res, 200, getHealth());
