@@ -73,6 +73,24 @@ test("currentCommit returns the repository HEAD", async () => {
   assert.match(commit, /^[0-9a-f]{40}$/i);
 });
 
+test("diff returns a bounded working-tree patch", async () => {
+  const root = await makeRoot();
+  await git(root, ["init", "-q"]);
+  await git(root, ["config", "user.name", "Pinaka Test"]);
+  await git(root, ["config", "user.email", "pinaka@example.invalid"]);
+  await fs.writeFile(path.join(root, "file.txt"), "hello\n");
+  await git(root, ["add", "file.txt"]);
+  assert.equal((await git(root, ["commit", "-m", "initial"])).exitCode, 0);
+  await fs.writeFile(path.join(root, "file.txt"), "hello world\n");
+
+  const repo = new GitRepository({ workspaceRoot: root });
+  const diff = await repo.diff();
+  assert.equal(diff.staged, false);
+  assert.equal(diff.truncated, false);
+  assert.match(diff.text, /diff --git a\/file\.txt b\/file\.txt/);
+  assert.match(diff.text, /\+hello world/);
+});
+
 test("clone accepts only HTTPS GitHub repository URLs", async () => {
   const root = await makeRoot();
   const repo = new GitRepository({ workspaceRoot: root });
