@@ -1,0 +1,34 @@
+# Node
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Build output
+dist/
+build/
+.next/
+out/
+coverage/
+
+# Environment files
+.env
+.env.*
+!.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Local agent state
+.agent/
+workspace/
+
+# OS / editors
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
