@@ -45,6 +45,14 @@ export const TOOL_SCHEMAS = Object.freeze({
   },
   "git.status": EMPTY_OBJECT_SCHEMA,
   "git.current_commit": EMPTY_OBJECT_SCHEMA,
+  "git.diff": {
+    type: "object",
+    properties: {
+      staged: { type: "boolean" },
+      maxOutputBytes: { type: "integer", minimum: 1, maximum: 524288 }
+    },
+    additionalProperties: false
+  },
   "git.clone": {
     type: "object",
     properties: {
