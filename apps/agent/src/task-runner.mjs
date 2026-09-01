@@ -255,7 +255,7 @@ export class AgentTaskRunner {
 
       this.#update(job, { stage: "clone", message: "Cloning the repository" });
       const git = this.#gitFactory({ workspaceRoot: workspace.path });
-      await git.clone(job.repositoryUrl);
+      await git.clone(job.repositoryUrl, { githubToken: this.#githubToken });
 
       this.#update(job, { stage: "branch", message: "Creating an isolated agent branch" });
       await git.createBranch(`agent/${job.id}`);
