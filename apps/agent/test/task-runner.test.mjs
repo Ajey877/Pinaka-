@@ -84,6 +84,39 @@ test("task runner executes the workspace lifecycle and returns completion status
   assert.equal(workspaceManager.active.size, 0);
 });
 
+test("task runner streams bounded lifecycle events to subscribers", async () => {
+  const workspaceManager = makeWorkspaceManager();
+  const runner = new AgentTaskRunner({
+    workspaceManager,
+    routerFactory: () => ({ chat: async () => ({}) }),
+    gitFactory: () => ({
+      async clone() {},
+      async createBranch() {}
+    }),
+    registryFactory: () => ({ workspaceRoot: "/tmp/event-task" }),
+    agentRunner: async () => ({ status: "passed", verification: { passed: true } })
+  });
+
+  const received = [];
+  const created = await runner.start({
+    repositoryUrl: "https://github.com/example/repo",
+    task: "Stream progress",
+    taskId: "event-task"
+  });
+  const unsubscribe = runner.subscribe(created.id, (event) => received.push(event));
+
+  const current = await waitForStatus(runner, created.id, "completed");
+  unsubscribe();
+
+  const history = runner.events(created.id);
+  assert.ok(history.length >= 2);
+  assert.ok(received.length >= 1);
+  assert.deepEqual(history.map((event) => event.taskId), history.map(() => created.id));
+  assert.equal(history.at(-1).status, "completed");
+  assert.equal(current.status, "completed");
+  assert.ok(history.every((event) => typeof event.id === "string" && event.id.length > 0));
+});
+
 test("task runner retains a useful failure result when execution fails", async () => {
   const workspaceManager = makeWorkspaceManager();
   const runner = new AgentTaskRunner({
