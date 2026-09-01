@@ -26,6 +26,7 @@ venv/
 # Local agent state
 .agent/
 workspace/
+.pinaka-workspaces/
 
 # OS / editors
 .DS_Store
