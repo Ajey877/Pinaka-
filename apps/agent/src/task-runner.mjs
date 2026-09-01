@@ -75,6 +75,27 @@ function makeJob(taskId, repositoryUrl, task) {
   };
 }
 
+function sanitizeToolEvent(event) {
+  if (!event || typeof event !== "object") return null;
+  const safe = {
+    type: typeof event.type === "string" ? event.type : "tool.event",
+    tool: typeof event.tool === "string" ? event.tool : "unknown"
+  };
+  if (event.type === "tool.finish") {
+    if (typeof event.ok === "boolean") safe.ok = event.ok;
+    if (Number.isFinite(event.durationMs)) safe.durationMs = Math.max(0, Math.min(300_000, event.durationMs));
+    if (typeof event.errorCode === "string") safe.errorCode = event.errorCode.slice(0, 128);
+    if (event.result && typeof event.result === "object") {
+      const resultType = typeof event.result.type === "string" ? event.result.type : undefined;
+      if (resultType) safe.result = { type: resultType };
+      if (Number.isInteger(event.result.count)) safe.result = { ...(safe.result || {}), count: Math.max(0, event.result.count) };
+      if (Number.isInteger(event.result.chars)) safe.result = { ...(safe.result || {}), chars: Math.max(0, event.result.chars) };
+      if (Array.isArray(event.result.keys)) safe.result = { ...(safe.result || {}), keys: event.result.keys.filter((key) => typeof key === "string").slice(0, 16) };
+    }
+  }
+  return safe;
+}
+
 export class AgentTaskRunner {
   #workspaceManager;
   #jobs = new Map();
@@ -243,8 +264,10 @@ export class AgentTaskRunner {
         workspaceRoot: workspace.path,
         githubToken: this.#githubToken,
         onToolEvent: (event) => {
-          const label = event.type === "tool.start" ? `Running ${event.tool}` : event.ok ? `Finished ${event.tool}` : `Failed ${event.tool}`;
-          this.#emit(job, event.type, label, event);
+          const safeEvent = sanitizeToolEvent(event);
+          if (!safeEvent) return;
+          const label = safeEvent.type === "tool.start" ? `Running ${safeEvent.tool}` : safeEvent.ok ? `Finished ${safeEvent.tool}` : `Failed ${safeEvent.tool}`;
+          this.#emit(job, safeEvent.type, label, safeEvent);
         }
       });
       const router = this.#routerFactory(modelOptions);
