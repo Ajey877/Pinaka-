@@ -147,6 +147,23 @@ textarea::placeholder, input::placeholder { color: var(--muted); opacity: .75; }
 .tool-item strong { display: block; font-size: 11px; }
 .tool-item span { display: block; margin-top: 4px; color: var(--muted); font-size: 10px; line-height: 1.35; }
 .skeleton-row { height: 48px; border-radius: 14px; background: linear-gradient(90deg, var(--card-strong), rgba(127,127,127,.10), var(--card-strong)); background-size: 220% 100%; animation: shimmer 1.4s infinite linear; border: 1px solid var(--hairline); }
+
+.diff-card { margin-top: 18px; }
+.diff-meta { display: flex; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
+.diff-viewer { overflow: hidden; border-radius: 18px; border: 1px solid var(--hairline); background: rgba(17, 18, 22, .96); color: #e9edf3; }
+.diff-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 12px; border-bottom: 1px solid rgba(255,255,255,.08); background: rgba(255,255,255,.04); font-size: 11px; color: rgba(255,255,255,.68); }
+.diff-toolbar strong { color: #fff; font-weight: 650; }
+.diff-scroll { max-height: 560px; overflow: auto; font: 12px/1.55 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+.diff-line { display: grid; grid-template-columns: 44px 1fr; min-width: max-content; }
+.diff-number { padding: 2px 8px 2px 10px; color: rgba(255,255,255,.32); text-align: right; user-select: none; border-right: 1px solid rgba(255,255,255,.06); }
+.diff-code { padding: 2px 14px; white-space: pre; }
+.diff-line.add .diff-code { background: rgba(52,199,89,.13); color: #d9ffe5; }
+.diff-line.del .diff-code { background: rgba(255,59,48,.13); color: #ffd8d4; }
+.diff-line.hunk .diff-code { background: rgba(10,132,255,.12); color: #cfe5ff; }
+.diff-line.meta .diff-code { color: rgba(255,255,255,.54); }
+.diff-empty { min-height: 180px; border: 0; background: transparent; color: rgba(255,255,255,.62); }
+.diff-truncated { margin: 0; padding: 10px 14px; color: #ffd27d; border-top: 1px solid rgba(255,255,255,.08); background: rgba(255,159,10,.08); font: 11px/1.4 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+
 @keyframes shimmer { to { background-position: -220% 0; } }
 .footer { display: flex; justify-content: space-between; gap: 16px; padding: 26px 3px 0; color: var(--muted); font-size: 11px; }
 
@@ -165,4 +182,5 @@ textarea::placeholder, input::placeholder { color: var(--muted); opacity: .75; }
   .tool-list { grid-template-columns: 1fr; }
   .secure-label { display: none; }
   .footer { flex-direction: column; }
+  .diff-scroll { font-size: 11px; }
 }
