@@ -165,6 +165,18 @@ function renderTaskResult(job) {
   }
 }
 
+function applyTaskEvent(event) {
+  if (!event || typeof event !== "object") return null;
+  const stage = typeof event.stage === "string" ? event.stage : "agent";
+  const message = typeof event.message === "string" ? event.message : "Working…";
+  const icon = ["completed"].includes(event.status) ? "✓" : ["needs_attention", "failed"].includes(event.status) ? "!" : "•";
+  addActivity(stage.replaceAll("_", " "), message, icon);
+  if (event.status === "completed") formMessage.textContent = "Task completed and verified.";
+  if (event.status === "needs_attention") formMessage.textContent = message;
+  if (event.status === "failed") formMessage.textContent = message;
+  return event.status;
+}
+
 async function pollTask(taskId) {
   const started = Date.now();
   const timeoutMs = 10 * 60 * 1000;
@@ -174,20 +186,10 @@ async function pollTask(taskId) {
     const job = await api(`/v1/agent/tasks/${encodeURIComponent(taskId)}`);
     if (job.stage !== lastStage) {
       lastStage = job.stage;
-      addActivity(job.stage.replaceAll("_", " "), job.message || "Working…", "•");
+      applyTaskEvent({ stage: job.stage, message: job.message, status: job.status });
     }
 
     if (["completed", "needs_attention", "failed"].includes(job.status)) {
-      if (job.status === "completed") {
-        formMessage.textContent = "Task completed and verified.";
-        addActivity("Task complete", "Pinaka finished the repository workflow.", "✓");
-      } else if (job.status === "needs_attention") {
-        formMessage.textContent = job.message || "Task finished but needs attention.";
-        addActivity("Needs attention", job.message || "Verification did not fully pass.", "!");
-      } else {
-        formMessage.textContent = job.message || "Task failed.";
-        addActivity("Task failed", job.error?.message || job.message || "Execution failed.", "!");
-      }
       renderTaskResult(job);
       return job;
     }
@@ -196,6 +198,62 @@ async function pollTask(taskId) {
   }
 
   throw new Error("Task polling timed out. Check the task status from the API.");
+}
+
+function streamTask(taskId) {
+  if (typeof EventSource !== "function") return pollTask(taskId);
+
+  return new Promise((resolve, reject) => {
+    const source = new EventSource(`/v1/agent/tasks/${encodeURIComponent(taskId)}/events`);
+    let settled = false;
+    let latestJob = null;
+
+    const finish = async (status) => {
+      if (settled) return;
+      settled = true;
+      source.close();
+      try {
+        latestJob = await api(`/v1/agent/tasks/${encodeURIComponent(taskId)}`);
+        renderTaskResult(latestJob);
+      } catch (error) {
+        if (status === "failed") {
+          reject(error);
+          return;
+        }
+      }
+      resolve(latestJob);
+    };
+
+    source.addEventListener("task", (message) => {
+      try {
+        const event = JSON.parse(message.data);
+        const status = applyTaskEvent(event);
+        if (["completed", "needs_attention", "failed"].includes(status)) finish(status);
+      } catch (error) {
+        settled = true;
+        source.close();
+        reject(error);
+      }
+    });
+
+    source.onerror = async () => {
+      if (settled) return;
+      source.close();
+      try {
+        const job = await api(`/v1/agent/tasks/${encodeURIComponent(taskId)}`);
+        if (["completed", "needs_attention", "failed"].includes(job.status)) {
+          settled = true;
+          applyTaskEvent({ stage: job.stage, message: job.message, status: job.status });
+          renderTaskResult(job);
+          resolve(job);
+          return;
+        }
+      } catch {
+        // Fall through to polling when the task state cannot be read.
+      }
+      pollTask(taskId).then(resolve, reject);
+    };
+  });
 }
 
 async function loadStatus() {
@@ -250,8 +308,8 @@ planButton.addEventListener("click", async () => {
       body: JSON.stringify({ repositoryUrl: repository, task })
     });
     addActivity("Agent started", `Task ${job.id} is running in an isolated workspace.`, "●");
-    formMessage.textContent = "Pinaka is working…";
-    await pollTask(job.id);
+    formMessage.textContent = "Pinaka is working live…";
+    await streamTask(job.id);
   } catch (error) {
     addActivity("Run failed", error.message, "!");
     formMessage.textContent = error.message;
