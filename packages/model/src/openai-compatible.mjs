@@ -5,12 +5,37 @@ const DEFAULT_TIMEOUT_MS = 60_000;
 const DEFAULT_MAX_OUTPUT_TOKENS = 8_192;
 const MAX_MESSAGES = 128;
 const MAX_MESSAGE_CHARS = 200_000;
+const MAX_TOOLS = 128;
+const MAX_TOOL_NAME_LENGTH = 128;
 
 function validateRole(role) {
   if (!["system", "user", "assistant", "tool"].includes(role)) {
     throw new ModelError("unsupported message role", "INVALID_MESSAGE_ROLE", { role });
   }
   return role;
+}
+
+function validateToolCalls(toolCalls, index) {
+  if (toolCalls === undefined) return undefined;
+  if (!Array.isArray(toolCalls) || toolCalls.length > MAX_TOOLS) {
+    throw new ModelError("tool_calls must be an array with at most 128 entries", "INVALID_TOOL_CALLS", { index });
+  }
+  return toolCalls.map((call, toolIndex) => {
+    if (!call || typeof call !== "object") {
+      throw new ModelError("each tool call must be an object", "INVALID_TOOL_CALL", { index, toolIndex });
+    }
+    const id = assertModelString(call.id, "tool call id", { maxLength: MAX_TOOL_NAME_LENGTH });
+    const type = call.type === undefined ? "function" : call.type;
+    if (type !== "function") throw new ModelError("unsupported tool call type", "INVALID_TOOL_CALL", { index, toolIndex });
+    const fn = call.function;
+    if (!fn || typeof fn !== "object") throw new ModelError("tool call function is required", "INVALID_TOOL_CALL", { index, toolIndex });
+    const name = assertModelString(fn.name, "tool call name", { maxLength: MAX_TOOL_NAME_LENGTH });
+    const args = fn.arguments === undefined ? "{}" : fn.arguments;
+    if (typeof args !== "string" || args.length > MAX_MESSAGE_CHARS) {
+      throw new ModelError("tool call arguments must be bounded text", "INVALID_TOOL_CALL", { index, toolIndex });
+    }
+    return { id, type: "function", function: { name, arguments: args } };
+  });
 }
 
 function validateMessages(messages) {
@@ -23,14 +48,51 @@ function validateMessages(messages) {
       throw new ModelError("each message must be an object", "INVALID_MESSAGE", { index });
     }
     const role = validateRole(message.role);
-    if (typeof message.content !== "string") {
-      throw new ModelError("message content must be text", "INVALID_MESSAGE_CONTENT", { index });
+    if (message.content !== null && typeof message.content !== "string") {
+      throw new ModelError("message content must be text or null", "INVALID_MESSAGE_CONTENT", { index });
     }
-    totalChars += message.content.length;
+    const content = message.content ?? "";
+    totalChars += content.length;
     if (totalChars > MAX_MESSAGE_CHARS) {
       throw new ModelError("message content is too large", "MODEL_INPUT_TOO_LARGE", { maxChars: MAX_MESSAGE_CHARS });
     }
-    return { role, content: message.content };
+    const safe = { role, content: message.content };
+    const toolCalls = validateToolCalls(message.tool_calls, index);
+    if (toolCalls !== undefined) safe.tool_calls = toolCalls;
+    if (role === "tool") {
+      const toolCallId = assertModelString(message.tool_call_id, "tool_call_id", { maxLength: MAX_TOOL_NAME_LENGTH });
+      safe.tool_call_id = toolCallId;
+    }
+    return safe;
+  });
+}
+
+function validateTools(tools) {
+  if (tools === undefined) return undefined;
+  if (!Array.isArray(tools) || tools.length > MAX_TOOLS) {
+    throw new ModelError("tools must be an array with at most 128 entries", "INVALID_TOOLS");
+  }
+  return tools.map((tool, index) => {
+    if (!tool || typeof tool !== "object" || tool.type !== "function" || !tool.function || typeof tool.function !== "object") {
+      throw new ModelError("each tool must be a function tool definition", "INVALID_TOOL_DEFINITION", { index });
+    }
+    const name = assertModelString(tool.function.name, "tool name", { maxLength: MAX_TOOL_NAME_LENGTH });
+    const description = tool.function.description === undefined ? "" : tool.function.description;
+    if (typeof description !== "string" || description.length > 4_000) {
+      throw new ModelError("tool description is invalid", "INVALID_TOOL_DEFINITION", { index });
+    }
+    const parameters = tool.function.parameters;
+    if (!parameters || typeof parameters !== "object" || Array.isArray(parameters)) {
+      throw new ModelError("tool parameters schema is required", "INVALID_TOOL_DEFINITION", { index });
+    }
+    return {
+      type: "function",
+      function: {
+        name,
+        description,
+        parameters
+      }
+    };
   });
 }
 
@@ -90,11 +152,16 @@ export class OpenAICompatibleProvider {
     return this.#model;
   }
 
-  async chat({ messages, temperature, maxOutputTokens = DEFAULT_MAX_OUTPUT_TOKENS, signal } = {}) {
+  async chat({ messages, temperature, maxOutputTokens = DEFAULT_MAX_OUTPUT_TOKENS, signal, tools, toolChoice } = {}) {
     const safeMessages = validateMessages(messages);
     const maxTokens = validateMaxOutputTokens(maxOutputTokens);
+    const safeTools = validateTools(tools);
     if (temperature !== undefined && (typeof temperature !== "number" || temperature < 0 || temperature > 2)) {
       throw new ModelError("temperature must be between 0 and 2", "INVALID_TEMPERATURE");
+    }
+    if (toolChoice !== undefined && toolChoice !== "auto" && toolChoice !== "none" && toolChoice !== "required" &&
+        !(toolChoice && typeof toolChoice === "object" && toolChoice.type === "function" && toolChoice.function?.name)) {
+      throw new ModelError("toolChoice is invalid", "INVALID_TOOL_CHOICE");
     }
 
     const headers = {
@@ -109,6 +176,8 @@ export class OpenAICompatibleProvider {
       max_tokens: maxTokens
     };
     if (temperature !== undefined) body.temperature = temperature;
+    if (safeTools !== undefined) body.tools = safeTools;
+    if (toolChoice !== undefined) body.tool_choice = toolChoice;
 
     const timeoutController = new AbortController();
     const timer = setTimeout(() => timeoutController.abort(new Error("model request timed out")), this.#timeoutMs);
@@ -146,13 +215,19 @@ export class OpenAICompatibleProvider {
       });
     }
 
-    const content = payload?.choices?.[0]?.message?.content;
-    if (typeof content !== "string") {
-      throw new ModelError("model response did not contain text", "INVALID_MODEL_RESPONSE");
+    const message = payload?.choices?.[0]?.message;
+    if (!message || typeof message !== "object") {
+      throw new ModelError("model response did not contain a message", "INVALID_MODEL_RESPONSE");
+    }
+    const content = message.content === null || typeof message.content === "string" ? message.content : null;
+    const toolCalls = validateToolCalls(message.tool_calls, 0);
+    if (typeof content !== "string" && !toolCalls?.length) {
+      throw new ModelError("model response did not contain text or tool calls", "INVALID_MODEL_RESPONSE");
     }
 
     return {
-      content,
+      content: content ?? "",
+      toolCalls: toolCalls || [],
       model: payload.model || this.#model,
       id: payload.id || null,
       usage: payload.usage || null
