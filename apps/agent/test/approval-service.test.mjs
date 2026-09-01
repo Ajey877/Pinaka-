@@ -41,15 +41,31 @@ test("approval service rejects duplicate decisions", async () => {
 });
 
 test("approval service rejects approval when the retained diff is truncated", async () => {
-  const service = new ApprovalService({ workspaceManager: {} , githubToken: "token" });
+  const service = new ApprovalService({ workspaceManager: {}, githubToken: "token" });
   const job = acceptedJob({ result: { status: "accepted", diff: { text: "diff", truncated: true } } });
   await assert.rejects(() => service.decide(job, "approve"), (error) => error.code === "DIFF_TRUNCATED");
 });
 
-test("approval service requires a GitHub token before publishing", async () => {
+test("approval service requires a GitHub sign-in token before publishing", async () => {
   let created = false;
   const workspaceManager = { create: async () => { created = true; }, release: async () => {}, discard: async () => {} };
   const service = new ApprovalService({ workspaceManager, githubPrClient: { createPullRequest: async () => null } });
-  await assert.rejects(() => service.decide(acceptedJob({ id: "task-no-token" }), "approve"), (error) => error.code === "GITHUB_TOKEN_REQUIRED" && error.statusCode === 503);
+  await assert.rejects(() => service.decide(acceptedJob({ id: "task-no-token" }), "approve"), (error) => error.code === "GITHUB_AUTH_REQUIRED" && error.statusCode === 401);
   assert.equal(created, false);
+});
+
+test("approval service accepts a per-session GitHub token for publishing", async () => {
+  const workspaceManager = {
+    async create() { return { path: "/tmp/pinaka-approval-session" }; },
+    async release() {},
+    async discard() {}
+  };
+  let prCalled = false;
+  const service = new ApprovalService({
+    workspaceManager,
+    githubPrClient: { createPullRequest: async () => { prCalled = true; return { number: 7, url: "https://github.com/example/repo/pull/7" }; } }
+  });
+  const result = await service.decide(acceptedJob({ id: "task-session" }), "approve", { githubToken: "gho_session" });
+  assert.equal(result.approval.published, true);
+  assert.equal(prCalled, true);
 });
