@@ -21,6 +21,17 @@ function buildApiUrl(apiBase, path) {
   return new URL(normalizedPath, base.toString().endsWith("/") ? base.toString() : `${base}/`);
 }
 
+function validateContentPath(path) {
+  if (typeof path !== "string") {
+    throw new ToolError("path must be a string", "INVALID_ARGUMENT");
+  }
+  const segments = path.split("/").filter(Boolean);
+  if (segments.some((segment) => segment === "." || segment === "..")) {
+    throw new ToolError("GitHub content path contains a traversal segment", "INVALID_ARGUMENT");
+  }
+  return segments;
+}
+
 async function requestJson(url, { token, timeoutMs, maxResponseBytes }) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
@@ -98,15 +109,8 @@ export class GitHubClient {
   async getContents(owner, repo, path = "", ref = undefined) {
     validateRepoPart(owner, "owner");
     validateRepoPart(repo, "repository");
-    if (typeof path !== "string") {
-      throw new ToolError("path must be a string", "INVALID_ARGUMENT");
-    }
-
-    const encodedPath = path
-      .split("/")
-      .filter(Boolean)
-      .map((segment) => encodeURIComponent(segment))
-      .join("/");
+    const segments = validateContentPath(path);
+    const encodedPath = segments.map((segment) => encodeURIComponent(segment)).join("/");
     const suffix = encodedPath ? `/${encodedPath}` : "";
     const url = buildApiUrl(this.apiBase, `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/contents${suffix}`);
     if (ref !== undefined) {
