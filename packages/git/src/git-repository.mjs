@@ -44,8 +44,16 @@ function parseStatus(output) {
   const lines = output.split(/\r?\n/).filter(Boolean);
   const branchLine = lines.find((line) => line.startsWith("## ")) || "## ";
   const branchInfo = branchLine.slice(3);
-  const [headPart] = branchInfo.split("...");
-  const branch = headPart.split(" ")[0] || "HEAD";
+  let branch = "HEAD";
+
+  if (branchInfo.startsWith("No commits yet on ")) {
+    branch = branchInfo.slice("No commits yet on ".length).trim() || "HEAD";
+  } else if (branchInfo.startsWith("HEAD (no branch)")) {
+    branch = "HEAD";
+  } else {
+    branch = (branchInfo.split("...")[0].split(" ")[0] || "HEAD").trim();
+  }
+
   const entries = lines.filter((line) => !line.startsWith("## "));
 
   return {
