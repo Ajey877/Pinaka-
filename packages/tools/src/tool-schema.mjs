@@ -69,6 +69,18 @@ export const TOOL_SCHEMAS = Object.freeze({
     },
     additionalProperties: false
   },
+  "verification.check_changes": {
+    type: "object",
+    properties: {
+      changes: { type: "array", items: { type: "object" } },
+      maxChangedFiles: { type: "integer", minimum: 0 },
+      maxAddedLines: { type: "integer", minimum: 0 },
+      maxDeletedLines: { type: "integer", minimum: 0 },
+      maxFileBytes: { type: "integer", minimum: 0 }
+    },
+    required: ["changes"],
+    additionalProperties: false
+  },
   "github.repository": {
     type: "object",
     properties: {
