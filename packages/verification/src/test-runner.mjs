@@ -1,6 +1,7 @@
 import { VerificationError } from "./errors.mjs";
 
 const DEFAULT_TIMEOUT_MS = 120_000;
+const MIN_TIMEOUT_MS = 1_000;
 const MAX_TIMEOUT_MS = 600_000;
 const MAX_CHECKS = 8;
 const MAX_OUTPUT_BYTES = 256 * 1024;
@@ -12,6 +13,17 @@ function validatePositiveInteger(value, name, max) {
       `${name} must be a positive integer no greater than ${max}`,
       "INVALID_VERIFICATION_OPTION",
       { name, value, max }
+    );
+  }
+  return value;
+}
+
+function validateTimeout(value) {
+  if (!Number.isInteger(value) || value < MIN_TIMEOUT_MS || value > MAX_TIMEOUT_MS) {
+    throw new VerificationError(
+      `timeoutMs must be between ${MIN_TIMEOUT_MS} and ${MAX_TIMEOUT_MS}`,
+      "INVALID_VERIFICATION_OPTION",
+      { name: "timeoutMs", value, min: MIN_TIMEOUT_MS, max: MAX_TIMEOUT_MS }
     );
   }
   return value;
@@ -104,7 +116,7 @@ export async function runVerificationChecks({
   if (typeof execute !== "function") {
     throw new VerificationError("execute function is required", "EXECUTOR_REQUIRED");
   }
-  const timeout = validatePositiveInteger(timeoutMs, "timeoutMs", MAX_TIMEOUT_MS);
+  const timeout = validateTimeout(timeoutMs);
   const checks = planVerificationChecks(inspection);
   const results = [];
 
