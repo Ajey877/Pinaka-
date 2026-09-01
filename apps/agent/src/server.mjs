@@ -18,7 +18,7 @@ const TERMINAL_STATUSES = new Set(["completed", "needs_attention", "failed"]);
 
 function sendJson(res, statusCode, payload, headers = {}) {
   const body = JSON.stringify(payload);
-  res.writeHead(statusCode, { "content-type": "application/json; charset=utf-8", "content-length": Buffer.byteLength(body), "cache-control": "no-store", "access-control-allow-origin": "*", "access-control-allow-headers": "content-type,x-csrf-token", "access-control-allow-methods": "GET,POST,OPTIONS", ...headers });
+  res.writeHead(statusCode, { "content-type": "application/json; charset=utf-8", "content-length": Buffer.byteLength(body), "cache-control": "no-store", ...headers });
   res.end(body);
 }
 async function readJson(req) {
@@ -55,15 +55,14 @@ function assertSameOrigin(req) {
 }
 function requireMutationSession(req) {
   const session = requireSession(req);
-  const suppliedCsrf = req.headers["x-csrf-token"];
-  if (suppliedCsrf) return authService.assertCsrf(req.headers);
+  if (req.headers["x-csrf-token"]) return authService.assertCsrf(req.headers);
   assertSameOrigin(req);
   return session;
 }
 function writeSse(res, event) { res.write(`id: ${event.id}\n`); res.write("event: task\n"); res.write(`data: ${JSON.stringify(event)}\n\n`); }
 function streamTaskEvents(res, taskId) {
   const history = taskRunner.events(taskId);
-  res.writeHead(200, { "content-type": "text/event-stream; charset=utf-8", "cache-control": "no-cache, no-store, must-revalidate", "connection": "keep-alive", "x-accel-buffering": "no", "access-control-allow-origin": "*" });
+  res.writeHead(200, { "content-type": "text/event-stream; charset=utf-8", "cache-control": "no-cache, no-store, must-revalidate", "connection": "keep-alive", "x-accel-buffering": "no" });
   res.flushHeaders?.(); res.write(": connected\n\n"); for (const event of history) writeSse(res, event);
   const lastEvent = history.at(-1); if (lastEvent && TERMINAL_STATUSES.has(lastEvent.status)) { res.end(); return; }
   let closed = false; let heartbeat = null;
@@ -73,7 +72,7 @@ function streamTaskEvents(res, taskId) {
 }
 
 const server = http.createServer(async (req, res) => {
-  if (req.method === "OPTIONS") { res.writeHead(204, { "access-control-allow-origin": "*", "access-control-allow-headers": "content-type,x-csrf-token", "access-control-allow-methods": "GET,POST,OPTIONS" }); res.end(); return; }
+  if (req.method === "OPTIONS") { res.writeHead(204, { "cache-control": "no-store" }); res.end(); return; }
   try {
     const url = new URL(req.url, `http://${req.headers.host || "localhost"}`);
     if (req.method === "GET" && url.pathname === "/auth/github") { res.writeHead(302, { location: authService.begin(), "cache-control": "no-store" }); res.end(); return; }
@@ -102,4 +101,5 @@ const server = http.createServer(async (req, res) => {
 });
 server.listen(PORT, HOST, () => console.log(`Pinaka agent listening on http://${HOST}:${PORT}`));
 function shutdown(signal) { console.log(`Received ${signal}; shutting down.`); server.close(() => process.exit(0)); }
-process.on("SIGINT", () => shutdown("SIGINT")); process.on("SIGTERM", () => shutdown("SIGTERM"));
+process.on("SIGINT", () => shutdown("SIGINT"));
+process.on("SIGTERM", () => shutdown("SIGTERM"));
