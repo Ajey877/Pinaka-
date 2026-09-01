@@ -13,8 +13,8 @@ import {
   writeTextFile
 } from "@pinaka/tools";
 
-export function createToolRegistry({ workspaceRoot, githubToken = "" } = {}) {
-  const registry = new ToolRegistry();
+export function createToolRegistry({ workspaceRoot, githubToken = "", onToolEvent } = {}) {
+  const registry = new ToolRegistry({ onEvent: onToolEvent });
   const github = new GitHubClient({ token: githubToken });
   const git = new GitRepository({ workspaceRoot });
 
