@@ -81,6 +81,16 @@ export const TOOL_SCHEMAS = Object.freeze({
     required: ["changes"],
     additionalProperties: false
   },
+  "verification.run_checks": {
+    type: "object",
+    properties: {
+      inspection: { type: "object" },
+      timeoutMs: { type: "integer", minimum: 1000, maximum: 600000 },
+      continueOnFailure: { type: "boolean" }
+    },
+    required: ["inspection"],
+    additionalProperties: false
+  },
   "github.repository": {
     type: "object",
     properties: {
