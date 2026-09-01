@@ -40,6 +40,14 @@ function makePrBody(job, commit) {
     "- Changes were applied to a fresh clone and pushed to an isolated agent branch.", ""
   ].join("\n").slice(0, 10_000);
 }
+function gitAuthEnvironment(githubToken) {
+  return {
+    GIT_TERMINAL_PROMPT: "0",
+    GIT_CONFIG_COUNT: "1",
+    GIT_CONFIG_KEY_0: "http.extraHeader",
+    GIT_CONFIG_VALUE_0: `Authorization: Bearer ${githubToken}`
+  };
+}
 
 export class ApprovalService {
   #workspaceManager;
@@ -78,7 +86,8 @@ export class ApprovalService {
     const workspace = await this.#workspaceManager.create(`approval-${job.id}`);
     try {
       const run = (args, options = {}) => runCommand({ workspaceRoot: workspace.path, executable: "git", args, ...options });
-      const clone = await run(["clone", "--no-recurse-submodules", "--depth", "1", job.repositoryUrl, "."], { timeoutMs: 120_000, maxOutputBytes: 512 * 1024 });
+      const authEnvironment = gitAuthEnvironment(this.#githubToken);
+      const clone = await run(["clone", "--no-recurse-submodules", "--depth", "1", job.repositoryUrl, "."], { timeoutMs: 120_000, maxOutputBytes: 512 * 1024, environment: authEnvironment });
       if (clone.exitCode !== 0 || clone.timedOut) throw Object.assign(new Error("approval clone failed"), { code: "APPROVAL_CLONE_FAILED" });
 
       const branch = `agent/${job.id}`;
@@ -104,11 +113,7 @@ export class ApprovalService {
       const push = await run(["push", "--set-upstream", "origin", branch], {
         timeoutMs: 120_000,
         maxOutputBytes: 128 * 1024,
-        environment: {
-          GIT_CONFIG_COUNT: "1",
-          GIT_CONFIG_KEY_0: "http.extraHeader",
-          GIT_CONFIG_VALUE_0: `Authorization: Bearer ${this.#githubToken}`
-        }
+        environment: authEnvironment
       });
       if (push.exitCode !== 0 || push.timedOut) throw Object.assign(new Error("approved branch could not be pushed to GitHub"), { code: "APPROVAL_PUSH_FAILED" });
 
@@ -137,4 +142,4 @@ export class ApprovalService {
   }
 }
 
-export const __test = Object.freeze({ makeCommitMessage, makePrTitle, makePrBody, normalizeDiff });
+export const __test = Object.freeze({ makeCommitMessage, makePrTitle, makePrBody, normalizeDiff, gitAuthEnvironment });
