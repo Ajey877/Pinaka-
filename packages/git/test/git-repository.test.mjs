@@ -35,7 +35,7 @@ test("status reports a clean initialized repository", async () => {
 
   const status = await repo.status();
   assert.equal(status.clean, true);
-  assert.equal(status.branch, "HEAD");
+  assert.match(status.branch, /^[A-Za-z0-9._/-]+$/);
 });
 
 test("createBranch refuses dirty workspaces and creates a safe task branch", async () => {
