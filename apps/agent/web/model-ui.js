@@ -15,7 +15,11 @@ function setMessage(text, ok = null) {
 function renderModels(provider) {
   const select = byId("modelSelect");
   const customBase = byId("baseUrlField");
+  const customModel = byId("customModelField");
+  const customBaseInput = byId("baseUrlInput");
+  const customModelInput = byId("customModelInput");
   if (!select || !provider) return;
+
   select.replaceChildren();
   const models = Array.isArray(provider.models) ? provider.models : [];
   models.forEach((model) => {
@@ -24,17 +28,18 @@ function renderModels(provider) {
     option.textContent = `${model.name}${model.free ? " · Free" : ""}`;
     select.appendChild(option);
   });
-  select.disabled = models.length === 0;
+
+  const isCustom = provider.id === "custom";
+  select.disabled = isCustom;
   state.model = models[0]?.id || "";
-  if (provider.id === "custom") {
-    select.disabled = false;
-    const option = document.createElement("option");
-    option.value = "";
-    option.textContent = "Enter model ID below";
-    select.appendChild(option);
-    select.value = "";
-  }
-  if (customBase) customBase.hidden = provider.id !== "custom";
+  state.baseUrl = isCustom ? "" : provider.baseUrl || "";
+  if (!isCustom) select.value = state.model;
+
+  if (customBase) customBase.hidden = !isCustom;
+  if (customModel) customModel.hidden = !isCustom;
+  if (customBaseInput) customBaseInput.value = isCustom ? state.baseUrl : provider.baseUrl || "";
+  if (customModelInput) customModelInput.value = "";
+
   const keyLink = byId("modelKeyLink");
   if (keyLink) {
     if (provider.docsUrl) {
@@ -45,6 +50,7 @@ function renderModels(provider) {
       keyLink.hidden = true;
     }
   }
+
   const badge = byId("modelBadge");
   if (badge) badge.textContent = provider.freeTier ? "Free tier" : "BYOK";
 }
@@ -98,8 +104,9 @@ if (modelPanel) {
 
   testButton?.addEventListener("click", async () => {
     state.apiKey = keyInput?.value.trim() || "";
-    state.baseUrl = baseUrlInput?.value.trim() || "";
-    state.model = (state.provider === "custom" ? customModelInput?.value : modelSelect?.value) ?.trim() || "";
+    state.baseUrl = baseUrlInput?.value.trim() || state.baseUrl;
+    const rawModel = state.provider === "custom" ? customModelInput?.value : modelSelect?.value;
+    state.model = rawModel?.trim() || "";
     if (!state.apiKey) return setMessage("Enter your AI API key first.", false);
     testButton.disabled = true;
     setMessage("Testing AI connection…");
@@ -122,11 +129,18 @@ if (modelPanel) {
   window.fetch = async (input, init = {}) => {
     const url = typeof input === "string" ? input : input?.url || "";
     if (!url.endsWith("/v1/agent/run")) return originalFetch(input, init);
+
     state.apiKey = keyInput?.value.trim() || state.apiKey;
     state.baseUrl = baseUrlInput?.value.trim() || state.baseUrl;
-    state.model = (state.provider === "custom" ? customModelInput?.value : modelSelect?.value) ?.trim() || state.model;
+    const rawModel = state.provider === "custom" ? customModelInput?.value : modelSelect?.value;
+    state.model = rawModel?.trim() || state.model;
     if (!state.apiKey) throw new Error("AI API key is required. Choose a provider and enter your key.");
-    const sourceOptions = typeof input === "object" && input instanceof Request ? { method: input.method, headers: input.headers, body: await input.text() } : init;
+    if (!state.model) throw new Error("Choose or enter an AI model before starting the task.");
+    if (state.provider === "custom" && !state.baseUrl) throw new Error("Enter a base URL for the custom provider.");
+
+    const sourceOptions = typeof input === "object" && input instanceof Request
+      ? { method: input.method, headers: input.headers, body: await input.text() }
+      : init;
     let body = {};
     try { body = JSON.parse(sourceOptions.body || "{}"); } catch { throw new Error("Pinaka could not prepare the task request."); }
     const payload = { ...body, provider: state.provider, model: state.model, apiKey: state.apiKey, baseUrl: state.baseUrl };
