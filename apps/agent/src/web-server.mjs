@@ -42,7 +42,7 @@ export async function sendWebAsset(res, pathname) {
   res.writeHead(200, {
     "content-type": asset.contentType,
     "content-length": asset.content.length,
-    "cache-control": pathname === "/" ? "no-cache" : "public, max-age=3600"
+    "cache-control": "no-store, no-cache, must-revalidate"
   });
   res.end(asset.content);
   return true;
