@@ -1,9 +1,10 @@
 import { resolveProviderConfig, listProviders, freeProviderCatalog } from "@pinaka/model";
 
 export function publicProviderConfig() {
+  const stripSecrets = ({ id, name, mode, freeTier, baseUrl, docsUrl, envVar, models }) => ({ id, name, mode, freeTier, baseUrl, docsUrl, envVar, models });
   return {
-    providers: listProviders().map(({ id, name, mode, baseUrl, docsUrl, envVar, models }) => ({ id, name, mode, baseUrl, docsUrl, envVar, models })),
-    freeProviders: freeProviderCatalog()
+    providers: listProviders().map(stripSecrets),
+    freeProviders: freeProviderCatalog().map(stripSecrets)
   };
 }
 
