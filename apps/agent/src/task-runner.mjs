@@ -4,6 +4,7 @@ import { GitRepository } from "@pinaka/git";
 import { ModelRouter, OpenAICompatibleProvider, resolveProviderConfig } from "@pinaka/model";
 import { runAutonomousRepairLoop } from "@pinaka/core";
 import { createToolRegistry } from "./tool-runtime.mjs";
+import { LOCAL_USER_ID } from "./local-mode.mjs";
 
 const TASK_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
 const MAX_REPOSITORY_URL = 2_048;
@@ -85,8 +86,9 @@ export class AgentTaskRunner {
     const safeRepositoryUrl = validateRepositoryUrl(repositoryUrl);
     const safeTask = validateText(task, "task", MAX_TASK_CHARS);
     validateTaskId(taskId);
-    if (ownerId !== null && (!Number.isInteger(ownerId) || ownerId <= 0)) throw Object.assign(new Error("ownerId is invalid"), { statusCode: 400, code: "INVALID_OWNER_ID" });
-    if (ownerId !== null && (typeof githubToken !== "string" || githubToken.trim() === "")) throw Object.assign(new Error("githubToken is required for authenticated tasks"), { statusCode: 401, code: "AUTH_TOKEN_REQUIRED" });
+    const isLocalOwner = ownerId === LOCAL_USER_ID;
+    if (ownerId !== null && !isLocalOwner && (!Number.isInteger(ownerId) || ownerId <= 0)) throw Object.assign(new Error("ownerId is invalid"), { statusCode: 400, code: "INVALID_OWNER_ID" });
+    if (ownerId !== null && !isLocalOwner && (typeof githubToken !== "string" || githubToken.trim() === "")) throw Object.assign(new Error("githubToken is required for authenticated tasks"), { statusCode: 401, code: "AUTH_TOKEN_REQUIRED" });
     if (this.#jobs.has(taskId)) throw Object.assign(new Error(`task already exists: ${taskId}`), { statusCode: 409, code: "TASK_EXISTS" });
     if (this.#jobs.size >= MAX_JOBS) throw Object.assign(new Error("too many retained task results"), { statusCode: 429, code: "TASK_CAPACITY_REACHED" });
 

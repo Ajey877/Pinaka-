@@ -7,6 +7,7 @@ import { ApprovalService } from "./approval-service.mjs";
 import { GitHubAuthService } from "./auth-service.mjs";
 import { PersistentTaskStore } from "./task-store.mjs";
 import { providerCatalog, testModelConnection } from "./model-service.mjs";
+import { isLocalMode, localSession } from "./local-mode.mjs";
 import { SlidingWindowLimiter, ConcurrentTaskLimiter, clientKey, getHardeningConfig, securityHeaders } from "./hardening.mjs";
 
 const HOST = process.env.HOST || "0.0.0.0";
@@ -26,14 +27,14 @@ const taskLimiter = new ConcurrentTaskLimiter({ limit: HARDENING.concurrentTasks
 
 function json(res, status, payload, headers = {}) { const body = JSON.stringify(payload); res.writeHead(status, { ...securityHeaders(), "content-type": "application/json; charset=utf-8", "cache-control": "no-store", "content-length": Buffer.byteLength(body), ...headers }); res.end(body); }
 async function readJson(req) { let size = 0; const chunks = []; for await (const chunk of req) { size += chunk.length; if (size > MAX_BODY_BYTES) throw Object.assign(new Error("request body is too large"), { statusCode: 413, code: "BODY_TOO_LARGE" }); chunks.push(chunk); } if (!size) return {}; try { return JSON.parse(Buffer.concat(chunks).toString("utf8")); } catch { throw Object.assign(new Error("request body must contain valid JSON"), { statusCode: 400, code: "INVALID_JSON" }); } }
-function session(req) { const value = authService.getSession(req.headers); if (!value) throw Object.assign(new Error("GitHub sign-in is required"), { statusCode: 401, code: "AUTH_REQUIRED" }); return value; }
+function session(req) { const value = authService.getSession(req.headers); if (value) return value; if (isLocalMode()) return localSession(); throw Object.assign(new Error("GitHub sign-in is required"), { statusCode: 401, code: "AUTH_REQUIRED" }); }
 function sameOrigin(req) { const configured = String(process.env.PINAKA_PUBLIC_ORIGIN || "").trim().replace(/\/$/, ""); const protocol = String(req.headers["x-forwarded-proto"] || "").split(",")[0].trim() || (req.socket.encrypted ? "https" : "http"); const expected = configured || `${protocol}://${req.headers.host}`; const origin = String(req.headers.origin || "").replace(/\/$/, ""); if (origin && origin !== expected) throw Object.assign(new Error("request origin is not allowed"), { statusCode: 403, code: "CSRF_ORIGIN_REJECTED" }); if (!origin) { const referer = String(req.headers.referer || ""); if (!referer.startsWith(`${expected}/`)) throw Object.assign(new Error("request origin could not be verified"), { statusCode: 403, code: "CSRF_ORIGIN_REQUIRED" }); } }
-function mutationSession(req) { const value = session(req); if (req.headers["x-csrf-token"]) authService.assertCsrf(req.headers); else sameOrigin(req); return value; }
+function mutationSession(req) { const value = session(req); if (value.local === true) sameOrigin(req); else if (req.headers["x-csrf-token"]) authService.assertCsrf(req.headers); else sameOrigin(req); return value; }
 function taskId(pathname) { return pathname.match(/^\/v1\/agent\/tasks\/([A-Za-z0-9][A-Za-z0-9_-]{0,63})$/)?.[1] || null; }
 function eventsId(pathname) { return pathname.match(/^\/v1\/agent\/tasks\/([A-Za-z0-9][A-Za-z0-9_-]{0,63})\/events$/)?.[1] || null; }
 function approvalId(pathname) { return pathname.match(/^\/v1\/agent\/tasks\/([A-Za-z0-9][A-Za-z0-9_-]{0,63})\/approval$/)?.[1] || null; }
 function getTask(id) { try { return taskRunner.get(id); } catch (error) { if (error?.code !== "TASK_NOT_FOUND") throw error; const saved = taskStore.get(id); if (!saved) throw error; return saved; } }
-function owned(id, userId) { const job = getTask(id); if (job.ownerId !== userId) throw Object.assign(new Error("task is not accessible to this GitHub account"), { statusCode: 403, code: "TASK_FORBIDDEN" }); return job; }
+function owned(id, userId) { const job = getTask(id); if (job.ownerId !== userId) throw Object.assign(new Error("task is not accessible to this account"), { statusCode: 403, code: "TASK_FORBIDDEN" }); return job; }
 function decorated(job) { const result = approvalService.decorate(job); if (job.approval && typeof job.approval === "object") result.approval = job.approval; return result; }
 async function checkpoint(id) { try { const job = taskRunner.get(id); await taskStore.save({ ...job, events: taskRunner.events(id) }); } catch {} }
 function track(job, ownerId) { void checkpoint(job.id); let off = null; try { off = taskRunner.subscribe(job.id, (event) => { void checkpoint(job.id); if (TERMINAL.has(event.status)) { try { off?.(); } finally { taskLimiter.release(ownerId); } } }); } catch { taskLimiter.release(ownerId); } }
@@ -42,15 +43,15 @@ function stream(res, id) { let history; let live = true; try { history = taskRun
 
 const server = http.createServer(async (req, res) => { let timeout = null; try {
   timeout = setTimeout(() => { if (!res.writableEnded) { res.writeHead(408, { ...securityHeaders(), "content-type": "application/json; charset=utf-8", "cache-control": "no-store" }); res.end(JSON.stringify({ error: "request_timeout", code: "REQUEST_TIMEOUT" })); } req.destroy(); }, HARDENING.requestTimeoutMs);
-  if (req.method !== "GET" && !requestLimiter.allow(clientKey(req))) throw Object.assign(new Error("request rate limit exceeded"), { statusCode: 429, code: "RATE_LIMITED" });
+  if (req.method !== "GET" && req.method !== "OPTIONS" && !requestLimiter.allow(clientKey(req))) throw Object.assign(new Error("request rate limit exceeded"), { statusCode: 429, code: "RATE_LIMITED" });
   if (req.method === "OPTIONS") { res.writeHead(204, { ...securityHeaders(), "cache-control": "no-store", "allow": "GET,POST,OPTIONS" }); return res.end(); }
   const url = new URL(req.url, `http://${req.headers.host || "localhost"}`);
   if (req.method === "GET" && url.pathname === "/auth/github") { res.writeHead(302, { ...securityHeaders(), location: authService.begin(), "cache-control": "no-store" }); return res.end(); }
   if (req.method === "GET" && url.pathname === "/auth/github/callback") { const result = await authService.callback({ code: url.searchParams.get("code") || "", state: url.searchParams.get("state") || "" }); res.writeHead(302, { ...securityHeaders(), location: "/?auth=success", "set-cookie": result.setCookies, "cache-control": "no-store" }); return res.end(); }
-  if (req.method === "GET" && url.pathname === "/v1/auth/me") { const value = authService.getSession(req.headers); return json(res, 200, { authenticated: Boolean(value), user: value?.user || null }); }
-  if (req.method === "POST" && url.pathname === "/v1/auth/logout") { mutationSession(req); return json(res, 200, { authenticated: false }, { "set-cookie": authService.logout(req.headers) }); }
+  if (req.method === "GET" && url.pathname === "/v1/auth/me") { const value = authService.getSession(req.headers); return json(res, 200, { authenticated: Boolean(value), localMode: isLocalMode(), user: value?.user || null }); }
+  if (req.method === "POST" && url.pathname === "/v1/auth/logout") { const user = mutationSession(req); return json(res, 200, { authenticated: false, localMode: user.local === true }, { "set-cookie": user.local ? [] : authService.logout(req.headers) }); }
   if (req.method === "GET" && await sendWebAsset(res, url.pathname)) return;
-  if (req.method === "GET" && url.pathname === "/health") return json(res, 200, getHealth());
+  if (req.method === "GET" && url.pathname === "/health") return json(res, 200, { ...getHealth(), localMode: isLocalMode() });
   if (req.method === "GET" && url.pathname === "/v1/tools") return json(res, 200, { tools: tools.list() });
   if (req.method === "GET" && url.pathname === "/v1/models/providers") return json(res, 200, { providers: providerCatalog() }, { "cache-control": "public, max-age=600" });
   if (req.method === "POST" && url.pathname === "/v1/models/test") { mutationSession(req); const body = await readJson(req); return json(res, 200, await testModelConnection(body)); }
