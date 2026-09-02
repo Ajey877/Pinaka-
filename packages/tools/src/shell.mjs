@@ -1,4 +1,6 @@
 import { spawn } from "node:child_process";
+import path from "node:path";
+import fs from "node:fs/promises";
 import { ToolError } from "./errors.mjs";
 import { resolveSafePath } from "./path-policy.mjs";
 
@@ -23,12 +25,6 @@ export const DEFAULT_ALLOWED_EXECUTABLES = Object.freeze([
 ]);
 
 const BLOCKED_NODE_FLAGS = new Set(["-e", "--eval", "-p", "--print"]);
-const WINDOWS_COMMAND_FILES = new Map([
-  ["npm", "npm.cmd"],
-  ["npx", "npx.cmd"],
-  ["pnpm", "pnpm.cmd"],
-  ["yarn", "yarn.cmd"]
-]);
 const MAX_ENV_KEYS = 8;
 const MAX_ENV_VALUE_LENGTH = 8_192;
 
@@ -89,6 +85,23 @@ function buildChildEnvironment(overrides = {}) {
   );
 }
 
+async function resolveChildInvocation(executable) {
+  if (process.platform !== "win32") return { executable, argsPrefix: [] };
+
+  if (executable === "npm" || executable === "npx") {
+    const cliName = executable === "npm" ? "npm-cli.js" : "npx-cli.js";
+    const cliPath = path.join(path.dirname(process.execPath), "node_modules", "npm", "bin", cliName);
+    try {
+      await fs.access(cliPath);
+    } catch {
+      throw new ToolError(`bundled ${executable} CLI was not found`, "PACKAGE_MANAGER_UNAVAILABLE");
+    }
+    return { executable: process.execPath, argsPrefix: [cliPath] };
+  }
+
+  return { executable, argsPrefix: [] };
+}
+
 export async function runCommand({
   workspaceRoot,
   executable,
@@ -110,12 +123,12 @@ export async function runCommand({
   const normalizedExecutable = validateExecutable(executable, allowed);
   validateArgs(normalizedExecutable, args);
   const workingDirectory = resolveSafePath(workspaceRoot, cwd);
-  const childExecutable = process.platform === "win32"
-    ? (WINDOWS_COMMAND_FILES.get(normalizedExecutable) || normalizedExecutable)
-    : normalizedExecutable;
+  const invocation = await resolveChildInvocation(normalizedExecutable);
+  const childExecutable = invocation.executable;
+  const childArgs = [...invocation.argsPrefix, ...args];
 
   return new Promise((resolve, reject) => {
-    const child = spawn(childExecutable, args, {
+    const child = spawn(childExecutable, childArgs, {
       cwd: workingDirectory,
       shell: false,
       windowsHide: true,
