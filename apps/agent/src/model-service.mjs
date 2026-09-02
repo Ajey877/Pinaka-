@@ -1,5 +1,4 @@
-import { OpenAICompatibleProvider } from "@pinaka/model";
-import { resolveProviderConfig, listProviders } from "@pinaka/model";
+import { OpenAICompatibleProvider, resolveProviderConfig, listProviders } from "@pinaka/model";
 
 function maskKey(value) {
   if (typeof value !== "string" || value.length < 8) return "••••";
@@ -11,10 +10,11 @@ function safeProviderView(provider) {
     id: provider.id,
     name: provider.name,
     mode: provider.mode,
+    freeTier: provider.freeTier === true,
     baseUrl: provider.baseUrl,
     docsUrl: provider.docsUrl,
     envVar: provider.envVar,
-    models: provider.models
+    models: provider.models.map(({ id, name, free }) => ({ id, name, free: free === true }))
   };
 }
 
@@ -28,8 +28,7 @@ export async function testModelConnection({ provider, model, apiKey, baseUrl } =
     baseUrl: config.baseUrl,
     apiKey: config.apiKey,
     model: config.model,
-    timeoutMs: 30_000,
-    maxOutputTokens: 16
+    timeoutMs: 30_000
   });
   const started = Date.now();
   const response = await instance.chat({
