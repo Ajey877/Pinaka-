@@ -16,7 +16,7 @@ Your AI key is submitted only with the task request, kept in runtime memory for 
 
 [![Deploy to Koyeb](https://www.koyeb.com/static/images/deploy/button.svg)](https://app.koyeb.com/deploy?type=git&builder=dockerfile&repository=github.com/Ajey877/Pinaka-&branch=foundation%2Fbootstrap&name=pinaka&service_type=web&ports=3000%3Bhttp%3B%2F)
 
-The button deploys the repository using its included Dockerfile. Koyeb supports GitHub-backed deployment and Dockerfile builds. citeturn645495search0turn645495search2
+The button deploys the repository using its included Dockerfile. Koyeb supports GitHub-backed deployment and Dockerfile builds.
 
 For the first hosted deployment, configure these environment variables in Koyeb:
 
@@ -31,9 +31,7 @@ GITHUB_OAUTH_SCOPE=public_repo read:user
 
 Then open the generated `.koyeb.app` URL, sign in with GitHub, choose an AI provider, enter the provider key, test the connection, and start a coding task.
 
-Koyeb documents its generated public-domain environment variables and GitHub/Dockerfile deployment flow. citeturn645495search6turn645495search4
-
-**Important:** the free Koyeb instance is intended for lightweight/hobby use. It has limited CPU/RAM and does not provide persistent volumes, so a hosted Pinaka instance should not be treated as durable production storage. citeturn645495search6
+**Important:** the free Koyeb instance is intended for lightweight/hobby use. It has limited CPU/RAM and does not provide persistent volumes, so a hosted Pinaka instance should not be treated as durable production storage.
 
 ### Docker
 
