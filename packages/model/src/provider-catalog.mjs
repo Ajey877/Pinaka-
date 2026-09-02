@@ -5,6 +5,7 @@ export const PROVIDER_CATALOG = Object.freeze([
     id: "gemini",
     name: "Google Gemini",
     mode: "free-or-key",
+    freeTier: true,
     baseUrl: "https://generativelanguage.googleapis.com/v1beta/openai",
     envVar: "GEMINI_API_KEY",
     docsUrl: "https://aistudio.google.com/apikey",
@@ -17,30 +18,31 @@ export const PROVIDER_CATALOG = Object.freeze([
     id: "openrouter",
     name: "OpenRouter",
     mode: "free-or-key",
+    freeTier: true,
     baseUrl: "https://openrouter.ai/api/v1",
     envVar: "OPENROUTER_API_KEY",
     docsUrl: "https://openrouter.ai/keys",
     models: Object.freeze([
-      Object.freeze({ id: "openrouter/free", name: "OpenRouter Free Router", free: true }),
-      Object.freeze({ id: "openai/gpt-oss-20b:free", name: "GPT-OSS 20B", free: true })
+      Object.freeze({ id: "openrouter/free", name: "OpenRouter Free Router", free: true })
     ])
   }),
   Object.freeze({
     id: "groq",
     name: "Groq",
-    mode: "free-or-key",
+    mode: "free-tier-or-key",
+    freeTier: true,
     baseUrl: "https://api.groq.com/openai/v1",
     envVar: "GROQ_API_KEY",
     docsUrl: "https://console.groq.com/keys",
     models: Object.freeze([
-      Object.freeze({ id: "openai/gpt-oss-20b", name: "GPT-OSS 20B", free: true }),
-      Object.freeze({ id: "qwen/qwen3-32b", name: "Qwen3 32B", free: true })
+      Object.freeze({ id: "openai/gpt-oss-20b", name: "GPT-OSS 20B", free: false })
     ])
   }),
   Object.freeze({
     id: "openai",
     name: "OpenAI",
     mode: "key",
+    freeTier: false,
     baseUrl: "https://api.openai.com/v1",
     envVar: "OPENAI_API_KEY",
     docsUrl: "https://platform.openai.com/api-keys",
@@ -52,6 +54,7 @@ export const PROVIDER_CATALOG = Object.freeze([
     id: "custom",
     name: "Custom OpenAI-compatible",
     mode: "key",
+    freeTier: false,
     baseUrl: "",
     envVar: null,
     docsUrl: null,
@@ -93,10 +96,10 @@ export function resolveProviderConfig({ provider = "", model = "", apiKey = "", 
 }
 
 export function freeProviderCatalog() {
-  return listProviders().map((provider) => ({
+  return listProviders().filter((provider) => provider.freeTier || provider.models.some((model) => model.free)).map((provider) => ({
     ...provider,
     models: provider.models.filter((model) => model.free)
-  })).filter((provider) => provider.models.length > 0);
+  }));
 }
 
 export function providerCacheSeconds() {
