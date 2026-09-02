@@ -1,3 +1,5 @@
+import fs from "node:fs/promises";
+import path from "node:path";
 import { GitOperationError } from "./errors.mjs";
 import { runCommand } from "@pinaka/tools";
 
@@ -31,6 +33,18 @@ function buildGitAuthEnvironment(githubToken) {
     GIT_CONFIG_KEY_0: "http.extraHeader",
     GIT_CONFIG_VALUE_0: `Authorization: Bearer ${githubToken.trim()}`
   };
+}
+
+async function hasGitMetadata(workspaceRoot) {
+  try {
+    await fs.access(path.join(workspaceRoot, ".git"));
+    return true;
+  } catch (error) {
+    if (error?.code === "ENOENT" || error?.code === "ENOTDIR") return false;
+    throw new GitOperationError("unable to inspect workspace Git metadata", "GIT_METADATA_CHECK_FAILED", {
+      cause: error?.message
+    });
+  }
 }
 
 function requireSuccess(result, operation) {
@@ -137,15 +151,7 @@ export class GitRepository {
 
   async clone(repositoryUrl, { githubToken = "" } = {}) {
     const source = validateRepositoryUrl(repositoryUrl);
-    let status;
-    try {
-      status = await this.status();
-    } catch (error) {
-      if (error?.code !== "GIT_COMMAND_FAILED") throw error;
-      status = null;
-    }
-
-    if (status !== null) {
+    if (await hasGitMetadata(this.#workspaceRoot)) {
       throw new GitOperationError("workspace already contains a Git repository", "WORKSPACE_NOT_EMPTY");
     }
 
@@ -188,4 +194,4 @@ export class GitRepository {
   }
 }
 
-export const __test = Object.freeze({ buildGitAuthEnvironment });
+export const __test = Object.freeze({ buildGitAuthEnvironment, hasGitMetadata });
