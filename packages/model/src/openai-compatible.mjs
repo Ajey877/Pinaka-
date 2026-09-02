@@ -124,6 +124,20 @@ function normalizeBaseUrl(baseUrl) {
   return parsed.toString().replace(/\/$/, "");
 }
 
+function isGemini3Model(model) {
+  return /^gemini-3(?:\.|-)/i.test(model);
+}
+
+function friendlyProviderError(status) {
+  if (status === 400) return "AI provider rejected the request. The selected model may not support one of the request options.";
+  if (status === 401) return "AI provider rejected the API key. Check that the key is correct and active.";
+  if (status === 403) return "AI provider denied access. Check the API key, project permissions, and model access.";
+  if (status === 404) return "AI model or endpoint was not found. Choose a supported model or check the provider URL.";
+  if (status === 429) return "AI provider rate limit reached. Wait a moment or switch to another provider/model.";
+  if (status >= 500) return "AI provider is temporarily unavailable. Try again in a moment or switch providers.";
+  return `AI provider returned HTTP ${status}.`;
+}
+
 export class OpenAICompatibleProvider {
   #baseUrl;
   #apiKey;
@@ -175,7 +189,7 @@ export class OpenAICompatibleProvider {
       messages: safeMessages,
       max_tokens: maxTokens
     };
-    if (temperature !== undefined) body.temperature = temperature;
+    if (temperature !== undefined && !isGemini3Model(this.#model)) body.temperature = temperature;
     if (safeTools !== undefined) body.tools = safeTools;
     if (toolChoice !== undefined) body.tool_choice = toolChoice;
 
@@ -209,9 +223,13 @@ export class OpenAICompatibleProvider {
     }
 
     if (!response.ok) {
-      throw new ModelError("model provider returned an error", "MODEL_PROVIDER_ERROR", {
+      throw new ModelError(friendlyProviderError(response.status), "MODEL_PROVIDER_ERROR", {
         status: response.status,
-        providerError: payload?.error?.message || payload?.message || "unknown provider error"
+        providerError: typeof payload?.error?.message === "string"
+          ? payload.error.message.slice(0, 500)
+          : typeof payload?.message === "string"
+            ? payload.message.slice(0, 500)
+            : "unknown provider error"
       });
     }
 

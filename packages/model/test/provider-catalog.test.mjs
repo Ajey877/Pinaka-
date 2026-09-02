@@ -18,11 +18,16 @@ test("free catalog includes Gemini and OpenRouter", () => {
   assert.ok(ids.includes("openrouter"));
 });
 
+test("Gemini catalog uses currently supported free-tier models", () => {
+  const models = getProvider("gemini").models.map((model) => model.id);
+  assert.deepEqual(models, ["gemini-3.5-flash", "gemini-3.1-flash-lite"]);
+});
+
 test("provider config resolves a built-in provider without leaking the key", () => {
   const key = "example-secret-key-123456";
-  const config = resolveProviderConfig({ provider: "gemini", apiKey: key, model: "gemini-2.5-flash" });
+  const config = resolveProviderConfig({ provider: "gemini", apiKey: key, model: "gemini-3.5-flash" });
   assert.equal(config.providerId, "gemini");
-  assert.equal(config.model, "gemini-2.5-flash");
+  assert.equal(config.model, "gemini-3.5-flash");
   assert.equal(config.apiKey, key);
   assert.equal(config.baseUrl, getProvider("gemini").baseUrl);
 });

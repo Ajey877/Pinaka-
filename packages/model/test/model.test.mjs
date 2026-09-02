@@ -51,6 +51,26 @@ test("OpenAICompatibleProvider sends a normalized chat request", async () => {
   });
 });
 
+test("Gemini 3 requests omit deprecated sampling parameters", async () => {
+  let request;
+  const provider = new OpenAICompatibleProvider({
+    baseUrl: "https://generativelanguage.googleapis.com/v1beta/openai",
+    apiKey: "test-key",
+    model: "gemini-3.5-flash",
+    fetchImpl: async (_url, options) => {
+      request = JSON.parse(options.body);
+      return jsonResponse({ choices: [{ message: { content: "ok" } }] });
+    }
+  });
+
+  await provider.chat({
+    messages: [{ role: "user", content: "test" }],
+    temperature: 0
+  });
+
+  assert.equal(Object.hasOwn(request, "temperature"), false);
+});
+
 test("OpenAICompatibleProvider preserves tool calls and sends tool definitions", async () => {
   let request;
   const provider = new OpenAICompatibleProvider({
@@ -108,6 +128,24 @@ test("provider never requires an API key for local or public endpoints", async (
   assert.equal(authorization, null);
 });
 
+test("provider gives actionable HTTP errors without exposing credentials", async () => {
+  const provider = new OpenAICompatibleProvider({
+    baseUrl: "https://example.com/v1",
+    model: "test-model",
+    apiKey: "secret-key",
+    fetchImpl: async () => jsonResponse({ error: { message: "invalid api key secret-key" } }, { status: 401 })
+  });
+
+  await assert.rejects(
+    () => provider.chat({ messages: [{ role: "user", content: "test" }] }),
+    (error) => error instanceof ModelError &&
+      error.code === "MODEL_PROVIDER_ERROR" &&
+      error.message.includes("API key") &&
+      error.details.status === 401 &&
+      !error.message.includes("secret-key")
+  );
+});
+
 test("provider validates bad input and provider errors", async () => {
   const provider = new OpenAICompatibleProvider({
     baseUrl: "https://example.com/v1",
@@ -121,7 +159,7 @@ test("provider validates bad input and provider errors", async () => {
   );
   await assert.rejects(
     () => provider.chat({ messages: [{ role: "user", content: "test" }] }),
-    (error) => error instanceof ModelError && error.code === "MODEL_PROVIDER_ERROR" && error.details.status === 429
+    (error) => error instanceof ModelError && error.code === "MODEL_PROVIDER_ERROR" && error.details.status === 429 && error.message.includes("rate limit")
   );
 });
 
