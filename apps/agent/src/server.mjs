@@ -6,6 +6,7 @@ import { AgentTaskRunner } from "./task-runner.mjs";
 import { ApprovalService } from "./approval-service.mjs";
 import { GitHubAuthService } from "./auth-service.mjs";
 import { PersistentTaskStore } from "./task-store.mjs";
+import { providerCatalog, testModelConnection } from "./model-service.mjs";
 import { SlidingWindowLimiter, ConcurrentTaskLimiter, clientKey, getHardeningConfig, securityHeaders } from "./hardening.mjs";
 
 const HOST = process.env.HOST || "0.0.0.0";
@@ -51,6 +52,8 @@ const server = http.createServer(async (req, res) => { let timeout = null; try {
   if (req.method === "GET" && await sendWebAsset(res, url.pathname)) return;
   if (req.method === "GET" && url.pathname === "/health") return json(res, 200, getHealth());
   if (req.method === "GET" && url.pathname === "/v1/tools") return json(res, 200, { tools: tools.list() });
+  if (req.method === "GET" && url.pathname === "/v1/models/providers") return json(res, 200, { providers: providerCatalog() }, { "cache-control": "public, max-age=600" });
+  if (req.method === "POST" && url.pathname === "/v1/models/test") { mutationSession(req); const body = await readJson(req); return json(res, 200, await testModelConnection(body)); }
   if (req.method === "POST" && url.pathname === "/v1/agent/plan") { const body = await readJson(req); return json(res, 200, createPlan(body.task)); }
   if (req.method === "POST" && url.pathname === "/v1/agent/run") {
     const user = mutationSession(req);

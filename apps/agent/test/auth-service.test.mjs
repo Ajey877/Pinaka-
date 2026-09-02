@@ -12,12 +12,12 @@ test("PKCE challenge is deterministic and produces a URL-safe value", () => {
   assert.match(challenge, /^[A-Za-z0-9_-]+$/); assert.equal(challenge, __test.makeChallenge(verifier));
 });
 
-test("begin creates a stateful PKCE authorization URL with only required scopes", () => {
+test("begin creates a stateful PKCE authorization URL with public-repository scope", () => {
   const service = makeService(); const parsed = new URL(service.begin());
   assert.equal(parsed.origin, "https://github.com"); assert.equal(parsed.pathname, "/login/oauth/authorize");
   assert.equal(parsed.searchParams.get("client_id"), "client-id"); assert.equal(parsed.searchParams.get("redirect_uri"), "https://pinaka.example/auth/github/callback");
   assert.equal(parsed.searchParams.get("code_challenge_method"), "S256"); assert.match(parsed.searchParams.get("state"), /^[A-Za-z0-9_-]+$/); assert.match(parsed.searchParams.get("code_challenge"), /^[A-Za-z0-9_-]+$/);
-  assert.equal(parsed.searchParams.get("scope"), "repo read:user");
+  assert.equal(parsed.searchParams.get("scope"), "public_repo read:user");
 });
 
 test("callback creates HttpOnly session and readable CSRF cookie", async () => {
