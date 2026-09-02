@@ -102,6 +102,29 @@ test("clone accepts only HTTPS GitHub repository URLs", async () => {
   );
 });
 
+test("clone rejects a Git repository that exists directly in the workspace", async () => {
+  const root = await makeRoot();
+  await fs.mkdir(path.join(root, ".git"));
+  const repo = new GitRepository({ workspaceRoot: root });
+
+  await assert.rejects(
+    () => repo.clone("https://github.com/example/repository"),
+    (error) => error instanceof GitOperationError && error.code === "WORKSPACE_NOT_EMPTY"
+  );
+});
+
+test("clone does not mistake a parent Git repository for workspace Git metadata", async () => {
+  const parent = await makeRoot();
+  await git(parent, ["init", "-q"]);
+  const workspace = path.join(parent, "workspace");
+  await fs.mkdir(workspace);
+
+  assert.equal(await gitRepositoryTest.hasGitMetadata(workspace), false);
+  const nestedGit = path.join(workspace, ".git");
+  await fs.writeFile(nestedGit, "gitdir: /tmp/example-worktree\n");
+  assert.equal(await gitRepositoryTest.hasGitMetadata(workspace), true);
+});
+
 test("authenticated clone builds a scoped Git HTTP auth environment", () => {
   const environment = gitRepositoryTest.buildGitAuthEnvironment("secret-token");
   assert.equal(environment.GIT_TERMINAL_PROMPT, "0");
