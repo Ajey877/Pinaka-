@@ -30,7 +30,7 @@ test("web server exposes only the known browser assets", async () => {
 
   const auth = await readWebAsset("/auth-ui.js");
   assert.equal(auth.contentType, "text/javascript; charset=utf-8");
-  assert.match(auth.content.toString("utf8"), /Sign in with GitHub/);
+  assert.match(auth.content.toString("utf8"), /Local mode/);
 
   const history = await readWebAsset("/history-ui.js");
   assert.equal(history.contentType, "text/javascript; charset=utf-8");
