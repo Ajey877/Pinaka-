@@ -75,35 +75,11 @@ export class AgentTaskRunner {
     this.#registryFactory = registryFactory;
     this.#agentRunner = agentRunner;
   }
-
-  list(ownerId = null) {
-    const jobs = [...this.#jobs.values()];
-    return jobs.filter((job) => ownerId === null || job.ownerId === ownerId).map((job) => ({ ...job }));
-  }
-  get(taskId) {
-    validateTaskId(taskId);
-    const job = this.#jobs.get(taskId);
-    if (!job) throw Object.assign(new Error("task not found"), { statusCode: 404, code: "TASK_NOT_FOUND" });
-    return { ...job };
-  }
-  belongsTo(taskId, ownerId) {
-    const job = this.get(taskId);
-    return job.ownerId !== null && job.ownerId === ownerId;
-  }
-  subscribe(taskId, listener) {
-    validateTaskId(taskId);
-    if (!this.#jobs.has(taskId)) throw Object.assign(new Error("task not found"), { statusCode: 404, code: "TASK_NOT_FOUND" });
-    if (typeof listener !== "function") throw new TypeError("event listener must be a function");
-    let listeners = this.#subscribers.get(taskId);
-    if (!listeners) { listeners = new Set(); this.#subscribers.set(taskId, listeners); }
-    listeners.add(listener);
-    return () => { listeners.delete(listener); if (listeners.size === 0) this.#subscribers.delete(taskId); };
-  }
-  events(taskId) {
-    validateTaskId(taskId);
-    if (!this.#jobs.has(taskId)) throw Object.assign(new Error("task not found"), { statusCode: 404, code: "TASK_NOT_FOUND" });
-    return [...(this.#eventHistory.get(taskId) || [])];
-  }
+  list(ownerId = null) { const jobs = [...this.#jobs.values()]; return jobs.filter((job) => ownerId === null || job.ownerId === ownerId).map((job) => ({ ...job })); }
+  get(taskId) { validateTaskId(taskId); const job = this.#jobs.get(taskId); if (!job) throw Object.assign(new Error("task not found"), { statusCode: 404, code: "TASK_NOT_FOUND" }); return { ...job }; }
+  belongsTo(taskId, ownerId) { const job = this.get(taskId); return job.ownerId !== null && job.ownerId === ownerId; }
+  subscribe(taskId, listener) { validateTaskId(taskId); if (!this.#jobs.has(taskId)) throw Object.assign(new Error("task not found"), { statusCode: 404, code: "TASK_NOT_FOUND" }); if (typeof listener !== "function") throw new TypeError("event listener must be a function"); let listeners = this.#subscribers.get(taskId); if (!listeners) { listeners = new Set(); this.#subscribers.set(taskId, listeners); } listeners.add(listener); return () => { listeners.delete(listener); if (listeners.size === 0) this.#subscribers.delete(taskId); }; }
+  events(taskId) { validateTaskId(taskId); if (!this.#jobs.has(taskId)) throw Object.assign(new Error("task not found"), { statusCode: 404, code: "TASK_NOT_FOUND" }); return [...(this.#eventHistory.get(taskId) || [])]; }
 
   async start({ repositoryUrl, task, taskId = crypto.randomUUID().replaceAll("-", "").slice(0, 20), provider, model, apiKey, baseUrl, ownerId = null, githubToken = "" } = {}) {
     const safeRepositoryUrl = validateRepositoryUrl(repositoryUrl);
@@ -114,7 +90,7 @@ export class AgentTaskRunner {
     if (this.#jobs.has(taskId)) throw Object.assign(new Error(`task already exists: ${taskId}`), { statusCode: 409, code: "TASK_EXISTS" });
     if (this.#jobs.size >= MAX_JOBS) throw Object.assign(new Error("too many retained task results"), { statusCode: 429, code: "TASK_CAPACITY_REACHED" });
 
-    const modelConfig = resolveProviderConfig({ provider, model, apiKey, baseUrl });
+    const modelConfig = this.#routerFactory === buildDefaultRouter ? resolveProviderConfig({ provider, model, apiKey, baseUrl }) : { providerId: provider || null, providerName: provider || null, model: model || null, apiKey: apiKey || "", baseUrl: baseUrl || "" };
     const job = makeJob(taskId, safeRepositoryUrl, safeTask, ownerId);
     this.#jobs.set(taskId, job);
     this.#eventHistory.set(taskId, []);
@@ -123,20 +99,9 @@ export class AgentTaskRunner {
     void this.#run(job);
     return { ...job };
   }
-  #emit(job, type, message, data = {}) {
-    const event = Object.freeze({ id: crypto.randomUUID(), taskId: job.id, type, stage: job.stage, message, status: job.status, timestamp: new Date().toISOString(), data: data && typeof data === "object" ? { ...data } : {} });
-    const history = this.#eventHistory.get(job.id) || [];
-    if (history.length >= MAX_EVENTS_PER_TASK) history.shift();
-    history.push(event); this.#eventHistory.set(job.id, history);
-    for (const listener of this.#subscribers.get(job.id) || []) { try { listener(event); } catch { /* consumer cannot affect execution */ } }
-  }
+  #emit(job, type, message, data = {}) { const event = Object.freeze({ id: crypto.randomUUID(), taskId: job.id, type, stage: job.stage, message, status: job.status, timestamp: new Date().toISOString(), data: data && typeof data === "object" ? { ...data } : {} }); const history = this.#eventHistory.get(job.id) || []; if (history.length >= MAX_EVENTS_PER_TASK) history.shift(); history.push(event); this.#eventHistory.set(job.id, history); for (const listener of this.#subscribers.get(job.id) || []) { try { listener(event); } catch {} } }
   #update(job, patch) { Object.assign(job, patch, { updatedAt: new Date().toISOString() }); this.#emit(job, "task.stage", job.message); }
-  #emitCoreEvent(job, event) {
-    if (!event || typeof event !== "object") return;
-    const type = typeof event.type === "string" ? event.type : "agent.event";
-    const messageByType = { "verification.start": "Running repository verification", "verification.complete": event.passed ? "Verification passed" : "Verification failed", "review.start": "Starting final code review", "review.complete": event.accepted ? "Final review approved" : "Final review rejected", "repair.start": `Starting repair attempt ${event.attempt || ""}`.trim(), "repair.complete": `Repair attempt ${event.attempt || ""} complete`.trim(), "task.unverified": "Repository has no detectable verification checks", "task.failed": "Task exhausted its repair budget" };
-    this.#emit(job, type, messageByType[type] || type.replaceAll(".", " "), { ...event });
-  }
+  #emitCoreEvent(job, event) { if (!event || typeof event !== "object") return; const type = typeof event.type === "string" ? event.type : "agent.event"; const messageByType = { "verification.start": "Running repository verification", "verification.complete": event.passed ? "Verification passed" : "Verification failed", "review.start": "Starting final code review", "review.complete": event.accepted ? "Final review approved" : "Final review rejected", "repair.start": `Starting repair attempt ${event.attempt || ""}`.trim(), "repair.complete": `Repair attempt ${event.attempt || ""} complete`.trim(), "task.unverified": "Repository has no detectable verification checks", "task.failed": "Task exhausted its repair budget" }; this.#emit(job, type, messageByType[type] || type.replaceAll(".", " "), { ...event }); }
 
   async #run(job) {
     let workspace = null;
@@ -149,26 +114,15 @@ export class AgentTaskRunner {
       await git.clone(job.repositoryUrl, { githubToken: credentials.githubToken || "" });
       this.#update(job, { stage: "branch", message: "Creating an isolated agent branch" });
       await git.createBranch(`agent/${job.id}`);
-      this.#update(job, { stage: "model", message: `Running Pinaka with ${credentials.providerName || credentials.model}` });
+      this.#update(job, { stage: "model", message: `Running Pinaka with ${credentials.providerName || credentials.model || "configured model"}` });
       const registry = this.#registryFactory({ workspaceRoot: workspace.path, githubToken: credentials.githubToken || "", onToolEvent: (event) => { const safeEvent = sanitizeToolEvent(event); if (!safeEvent) return; this.#emit(job, safeEvent.type, safeEvent.ok === false ? `Failed ${safeEvent.tool}` : safeEvent.type === "tool.start" ? `Running ${safeEvent.tool}` : `Finished ${safeEvent.tool}`, safeEvent); } });
       const router = this.#routerFactory({ provider: credentials.providerId, apiKey: credentials.apiKey, baseUrl: credentials.baseUrl, model: credentials.model });
       const result = await this.#agentRunner({ registry, router, task: job.task, provider: "default", onEvent: (event) => this.#emitCoreEvent(job, event) });
       let diff = null;
-      try {
-        const diffResult = await git.diff({ staged: false, maxOutputBytes: MAX_RETAINED_DIFF_CHARS });
-        if (diffResult && typeof diffResult === "object") diff = { text: typeof diffResult.text === "string" ? diffResult.text : "", truncated: diffResult.truncated === true, changeCount: Number.isInteger(result?.finalReview?.diff?.changeCount) ? result.finalReview.diff.changeCount : null };
-      } catch (error) {
-        this.#emit(job, "diff.error", "Unable to capture the final diff", { errorCode: typeof error?.code === "string" ? error.code.slice(0, 128) : "DIFF_CAPTURE_FAILED" });
-      }
+      try { const diffResult = await git.diff({ staged: false, maxOutputBytes: MAX_RETAINED_DIFF_CHARS }); if (diffResult && typeof diffResult === "object") diff = { text: typeof diffResult.text === "string" ? diffResult.text : "", truncated: diffResult.truncated === true, changeCount: Number.isInteger(result?.finalReview?.diff?.changeCount) ? result.finalReview.diff.changeCount : null }; } catch (error) { this.#emit(job, "diff.error", "Unable to capture the final diff", { errorCode: typeof error?.code === "string" ? error.code.slice(0, 128) : "DIFF_CAPTURE_FAILED" }); }
       const finalResult = diff ? { ...result, diff } : result;
       this.#update(job, { status: result.status === "passed" || result.status === "repaired" || result.status === "accepted" ? "completed" : "needs_attention", stage: "complete", message: result.status === "repaired" ? "Task repaired and verified" : result.status === "passed" || result.status === "accepted" ? "Task verified" : "Task finished without full verification", result: finalResult });
-    } catch (error) {
-      this.#update(job, { status: "failed", stage: "error", message: error?.message || "Task failed", error: { code: error?.code || "TASK_FAILED", message: error?.message || "Task failed" } });
-    } finally {
-      this.#credentials.delete(job.id);
-      if (workspace) {
-        try { await this.#workspaceManager.release(job.id); } catch { try { await this.#workspaceManager.discard(job.id); } catch { /* best effort */ } }
-      }
-    }
+    } catch (error) { this.#update(job, { status: "failed", stage: "error", message: error?.message || "Task failed", error: { code: error?.code || "TASK_FAILED", message: error?.message || "Task failed" } }); }
+    finally { this.#credentials.delete(job.id); if (workspace) { try { await this.#workspaceManager.release(job.id); } catch { try { await this.#workspaceManager.discard(job.id); } catch {} } } }
   }
 }
