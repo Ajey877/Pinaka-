@@ -48,7 +48,7 @@ const server = http.createServer(async (req, res) => { let timeout = null; try {
   const url = new URL(req.url, `http://${req.headers.host || "localhost"}`);
   if (req.method === "GET" && url.pathname === "/auth/github") { res.writeHead(302, { ...securityHeaders(), location: authService.begin(), "cache-control": "no-store" }); return res.end(); }
   if (req.method === "GET" && url.pathname === "/auth/github/callback") { const result = await authService.callback({ code: url.searchParams.get("code") || "", state: url.searchParams.get("state") || "" }); res.writeHead(302, { ...securityHeaders(), location: "/?auth=success", "set-cookie": result.setCookies, "cache-control": "no-store" }); return res.end(); }
-  if (req.method === "GET" && url.pathname === "/v1/auth/me") { const value = authService.getSession(req.headers); return json(res, 200, { authenticated: Boolean(value), localMode: isLocalMode(), user: value?.user || null }); }
+  if (req.method === "GET" && url.pathname === "/v1/auth/me") { const value = authService.getSession(req.headers); return json(res, 200, { authenticated: Boolean(value), localMode: isLocalMode(), githubAvailable: authService.isConfigured(), user: value?.user || null }); }
   if (req.method === "POST" && url.pathname === "/v1/auth/logout") { const user = mutationSession(req); return json(res, 200, { authenticated: false, localMode: user.local === true }, { "set-cookie": user.local ? [] : authService.logout(req.headers) }); }
   if (req.method === "GET" && await sendWebAsset(res, url.pathname)) return;
   if (req.method === "GET" && url.pathname === "/health") return json(res, 200, { ...getHealth(), localMode: isLocalMode() });
