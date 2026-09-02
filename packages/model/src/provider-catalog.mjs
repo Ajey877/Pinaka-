@@ -10,8 +10,8 @@ export const PROVIDER_CATALOG = Object.freeze([
     envVar: "GEMINI_API_KEY",
     docsUrl: "https://aistudio.google.com/apikey",
     models: Object.freeze([
-      Object.freeze({ id: "gemini-2.5-flash", name: "Gemini 2.5 Flash", free: true }),
-      Object.freeze({ id: "gemini-2.5-flash-lite", name: "Gemini 2.5 Flash-Lite", free: true })
+      Object.freeze({ id: "gemini-3.5-flash", name: "Gemini 3.5 Flash", free: true }),
+      Object.freeze({ id: "gemini-3.1-flash-lite", name: "Gemini 3.1 Flash-Lite", free: true })
     ])
   }),
   Object.freeze({
