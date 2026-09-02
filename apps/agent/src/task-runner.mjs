@@ -1,7 +1,7 @@
 import crypto from "node:crypto";
 import { WorkspaceManager } from "@pinaka/workspace";
 import { GitRepository } from "@pinaka/git";
-import { ModelRouter, OpenAICompatibleProvider } from "@pinaka/model";
+import { ModelRouter, OpenAICompatibleProvider, resolveProviderConfig } from "@pinaka/model";
 import { runAutonomousRepairLoop } from "@pinaka/core";
 import { createToolRegistry } from "./tool-runtime.mjs";
 
@@ -30,12 +30,10 @@ function validateTaskId(taskId) {
   if (typeof taskId !== "string" || !TASK_ID_PATTERN.test(taskId)) throw Object.assign(new Error("invalid task id"), { statusCode: 400, code: "INVALID_TASK_ID" });
   return taskId;
 }
-function buildDefaultRouter({ apiKey = "", baseUrl, model } = {}) {
-  const resolvedBaseUrl = baseUrl || process.env.PINAKA_MODEL_BASE_URL || "https://openrouter.ai/api/v1";
-  const resolvedModel = model || process.env.PINAKA_MODEL || "";
-  if (!resolvedModel) throw Object.assign(new Error("PINAKA_MODEL is required to run an AI task"), { statusCode: 503, code: "MODEL_NOT_CONFIGURED" });
-  const provider = new OpenAICompatibleProvider({ baseUrl: resolvedBaseUrl, apiKey: apiKey || process.env.OPENROUTER_API_KEY || process.env.PINAKA_MODEL_API_KEY || "", model: resolvedModel });
-  return new ModelRouter().register("default", provider, { defaultProvider: true });
+function buildDefaultRouter({ provider = "", apiKey = "", baseUrl, model } = {}) {
+  const config = resolveProviderConfig({ provider, apiKey, baseUrl, model });
+  const instance = new OpenAICompatibleProvider({ baseUrl: config.baseUrl, apiKey: config.apiKey, model: config.model });
+  return new ModelRouter().register("default", instance, { defaultProvider: true });
 }
 function makeJob(taskId, repositoryUrl, task, ownerId = null) {
   return { id: taskId, ownerId, repositoryUrl, task, status: "queued", stage: "queued", message: "Waiting to start", createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(), result: null, error: null };
@@ -107,7 +105,7 @@ export class AgentTaskRunner {
     return [...(this.#eventHistory.get(taskId) || [])];
   }
 
-  async start({ repositoryUrl, task, taskId = crypto.randomUUID().replaceAll("-", "").slice(0, 20), model, apiKey, baseUrl, ownerId = null, githubToken = "" } = {}) {
+  async start({ repositoryUrl, task, taskId = crypto.randomUUID().replaceAll("-", "").slice(0, 20), provider, model, apiKey, baseUrl, ownerId = null, githubToken = "" } = {}) {
     const safeRepositoryUrl = validateRepositoryUrl(repositoryUrl);
     const safeTask = validateText(task, "task", MAX_TASK_CHARS);
     validateTaskId(taskId);
@@ -116,10 +114,11 @@ export class AgentTaskRunner {
     if (this.#jobs.has(taskId)) throw Object.assign(new Error(`task already exists: ${taskId}`), { statusCode: 409, code: "TASK_EXISTS" });
     if (this.#jobs.size >= MAX_JOBS) throw Object.assign(new Error("too many retained task results"), { statusCode: 429, code: "TASK_CAPACITY_REACHED" });
 
+    const modelConfig = resolveProviderConfig({ provider, model, apiKey, baseUrl });
     const job = makeJob(taskId, safeRepositoryUrl, safeTask, ownerId);
     this.#jobs.set(taskId, job);
     this.#eventHistory.set(taskId, []);
-    this.#credentials.set(taskId, { githubToken: typeof githubToken === "string" ? githubToken.trim() : "", apiKey, baseUrl, model });
+    this.#credentials.set(taskId, { githubToken: typeof githubToken === "string" ? githubToken.trim() : "", ...modelConfig });
     this.#emit(job, "queued", "Task queued");
     void this.#run(job);
     return { ...job };
@@ -150,9 +149,9 @@ export class AgentTaskRunner {
       await git.clone(job.repositoryUrl, { githubToken: credentials.githubToken || "" });
       this.#update(job, { stage: "branch", message: "Creating an isolated agent branch" });
       await git.createBranch(`agent/${job.id}`);
-      this.#update(job, { stage: "model", message: "Running Pinaka against the repository" });
+      this.#update(job, { stage: "model", message: `Running Pinaka with ${credentials.providerName || credentials.model}` });
       const registry = this.#registryFactory({ workspaceRoot: workspace.path, githubToken: credentials.githubToken || "", onToolEvent: (event) => { const safeEvent = sanitizeToolEvent(event); if (!safeEvent) return; this.#emit(job, safeEvent.type, safeEvent.ok === false ? `Failed ${safeEvent.tool}` : safeEvent.type === "tool.start" ? `Running ${safeEvent.tool}` : `Finished ${safeEvent.tool}`, safeEvent); } });
-      const router = this.#routerFactory({ apiKey: credentials.apiKey, baseUrl: credentials.baseUrl, model: credentials.model });
+      const router = this.#routerFactory({ provider: credentials.providerId, apiKey: credentials.apiKey, baseUrl: credentials.baseUrl, model: credentials.model });
       const result = await this.#agentRunner({ registry, router, task: job.task, provider: "default", onEvent: (event) => this.#emitCoreEvent(job, event) });
       let diff = null;
       try {
