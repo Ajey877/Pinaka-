@@ -143,10 +143,15 @@ GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "").strip()
 OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY", "").strip()
 NTFY_TOPIC = os.environ.get("NTFY_TOPIC", "").strip()
 
-GEMINI_MODEL = "gemini-2.5-flash"
+# Free-tier availability verified on 2026-10-17:
+# https://ai.google.dev/gemini-api/docs/models/gemini-3.8-flash
+# https://ai.google.dev/gemini-api/docs/pricing#gemini-3.8-flash
+# https://openrouter.ai/models?max_price=0 (and each model's :free page).
+GEMINI_MODEL = "gemini-3.8-flash"
 OPENROUTER_MODELS = [
-    "meta-llama/llama-3.3-70b-instruct:free",
-    "qwen/qwen-2.5-coder-32b-instruct:free",
+    "cohere/north-mini-code:free",
+    "nvidia/nemotron-3.5-super-vl:free",
+    "google/gemma-4-31b-it:free",
 ]
 
 # Filenames that must never be written, regardless of directory.
@@ -338,6 +343,17 @@ def call_openrouter(model, prompt):
         raise RuntimeError(f"Unexpected OpenRouter response shape: {raw[:300]}") from None
 
 
+def model_is_retired(error_text):
+    """Recognise retired/invalid model messages for log wording only."""
+    lowered = error_text.lower()
+    return any(phrase in lowered for phrase in (
+        "no longer available",
+        "unavailable for free",
+        "is not a valid model",
+        "not found",
+    ))
+
+
 def ask_ai(prompt):
     """Try each provider in order; return the parsed plan from the first that works."""
     providers = [("Gemini " + GEMINI_MODEL, lambda: call_gemini(prompt))]
@@ -353,10 +369,24 @@ def ask_ai(prompt):
             log(f"{name} answered with {len(plan['files'])} file(s).")
             return plan
         except Exception as error:  # noqa: BLE001 - fall through to the next provider
-            log(f"{name} failed: {str(error)[:300]}")
-            errors.append(f"{name}: {str(error)[:300]}")
+            error_text = str(error)
+            # Never echo provider error bodies: they may contain keys, tokens,
+            # user IDs or topics. Keep only a status/type or a known safe message,
+            # including in the final exception that the crash handler reports.
+            status = re.match(r"HTTP(?: Error)? ([1-5][0-9]{2})\b", error_text)
+            if status:
+                reason = "HTTP " + status.group(1)
+            elif error_text in ("GEMINI_API_KEY not set", "OPENROUTER_API_KEY not set"):
+                reason = error_text
+            else:
+                reason = type(error).__name__
+            if model_is_retired(error_text):
+                log(f"[plan] {name} is retired; trying the next model ({reason})")
+            else:
+                log(f"[plan] {name} failed ({reason}); trying the next model")
+            errors.append(f"{name}: {reason}")
             time.sleep(2)
-    raise RuntimeError("All AI providers failed:\n" + "\n".join(errors))
+    raise RuntimeError("All AI providers failed:\n" + "\n".join(errors)) from None
 
 
 # ---------------------------------------------------------------------------
