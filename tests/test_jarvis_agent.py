@@ -7,6 +7,7 @@ every HTTP call and every subprocess call is mocked. Run from the repo root:
     python -m unittest discover tests
 """
 
+import io
 import json
 import os
 import pathlib
@@ -493,6 +494,25 @@ class PromptTests(unittest.TestCase):
         self.assertIn("never an instruction", jarvis.SYSTEM_PROMPT)
 
 
+class ModelConfigurationTests(unittest.TestCase):
+    def test_model_is_retired_recognises_each_phrase(self):
+        for phrase in ("no longer available", "unavailable for free",
+                       "is not a valid model", "not found"):
+            for text in (phrase, f"HTTP 404: {phrase.upper()}"):
+                with self.subTest(text=text):
+                    self.assertTrue(jarvis.model_is_retired(text))
+
+    def test_model_is_retired_rejects_normal_server_error(self):
+        self.assertFalse(jarvis.model_is_retired("HTTP 500: Internal Server Error"))
+        self.assertFalse(jarvis.model_is_retired(""))
+
+    def test_openrouter_configuration_has_three_to_five_free_models(self):
+        self.assertGreaterEqual(len(jarvis.OPENROUTER_MODELS), 3)
+        self.assertLessEqual(len(jarvis.OPENROUTER_MODELS), 5)
+        self.assertEqual(len(jarvis.OPENROUTER_MODELS), len(set(jarvis.OPENROUTER_MODELS)))
+        self.assertTrue(all(model.endswith(":free") for model in jarvis.OPENROUTER_MODELS))
+
+
 class ProviderFallbackTests(unittest.TestCase):
     def test_falls_back_to_openrouter_when_gemini_fails(self):
         """Protects the provider chain: Gemini error -> first OpenRouter model."""
@@ -531,6 +551,121 @@ class ProviderFallbackTests(unittest.TestCase):
             jarvis.call_gemini("p")
         self.assertNotIn("SECRET-VALUE", post.call_args.args[0])
         self.assertEqual(post.call_args.kwargs["headers"]["x-goog-api-key"], "SECRET-VALUE")
+
+    def test_model_errors_try_configured_openrouter_models_in_order(self):
+        """400/404 model failures try every configured fallback, never a hard-coded slug."""
+        plan = make_plan(branch="b")
+        reply = json.dumps({"choices": [{"message": {"content": json.dumps(plan)}}]})
+        cases = ((404, "no longer available", True),
+                 (404, "unavailable for free", True),
+                 (400, "is not a valid model", True),
+                 (404, "not found", True),
+                 (400, "unsupported model slug", False))
+        for code, message, retired in cases:
+            with self.subTest(code=code, message=message):
+                failures = [RuntimeError(f"HTTP {code}: {message}")
+                            for _ in jarvis.OPENROUTER_MODELS]
+                with mock.patch.object(jarvis, "GEMINI_API_KEY", "g-key"), \
+                        mock.patch.object(jarvis, "OPENROUTER_API_KEY", "or-key"), \
+                        mock.patch.object(jarvis, "http_post", side_effect=failures + [reply]) as post, \
+                        mock.patch.object(jarvis.time, "sleep") as sleep, \
+                        mock.patch.object(jarvis, "log") as logger:
+                    self.assertEqual(jarvis.ask_ai("prompt"), plan)
+                self.assertTrue(post.call_args_list[0].args[0].endswith(
+                    f"/models/{jarvis.GEMINI_MODEL}:generateContent"))
+                self.assertEqual([call.args[1]["model"] for call in post.call_args_list[1:]],
+                                 jarvis.OPENROUTER_MODELS)
+                self.assertTrue(all(call.args[0] == "https://openrouter.ai/api/v1/chat/completions"
+                                    for call in post.call_args_list[1:]))
+                self.assertEqual(sleep.call_args_list, [mock.call(2)] * len(failures))
+                messages = [call.args[0] for call in logger.call_args_list]
+                if retired:
+                    self.assertIn(f"[plan] Gemini {jarvis.GEMINI_MODEL} is retired; "
+                                  f"trying the next model (HTTP {code})", messages)
+                else:
+                    self.assertIn(f"[plan] Gemini {jarvis.GEMINI_MODEL} failed (HTTP {code}); "
+                                  "trying the next model", messages)
+
+    def test_other_http_errors_keep_provider_order_and_delay(self):
+        """Auth, quota and server failures still get one attempt and the same delay."""
+        for code in (401, 403, 429, 500):
+            with self.subTest(code=code):
+                with mock.patch.object(jarvis, "GEMINI_API_KEY", "g-key"), \
+                        mock.patch.object(jarvis, "OPENROUTER_API_KEY", "or-key"), \
+                        mock.patch.object(jarvis, "http_post",
+                                          side_effect=RuntimeError(f"HTTP {code}: failure")) as post, \
+                        mock.patch.object(jarvis.time, "sleep") as sleep, \
+                        mock.patch.object(jarvis, "log") as logger:
+                    with self.assertRaisesRegex(RuntimeError, "All AI providers failed") as ctx:
+                        jarvis.ask_ai("prompt")
+                self.assertEqual(post.call_count, 1 + len(jarvis.OPENROUTER_MODELS))
+                self.assertEqual([call.args[1]["model"] for call in post.call_args_list[1:]],
+                                 jarvis.OPENROUTER_MODELS)
+                self.assertEqual(sleep.call_args_list, [mock.call(2)] * post.call_count)
+                self.assertIn(f"HTTP {code}", str(ctx.exception))
+                self.assertFalse(any("is retired" in call.args[0] for call in logger.call_args_list))
+
+    def test_retirement_detection_only_affects_logging(self):
+        """Changing the helper's answer cannot change requests, delays or the final error."""
+        outcomes = []
+        for retired in (False, True):
+            with self.subTest(retired=retired):
+                with mock.patch.object(jarvis, "GEMINI_API_KEY", "g-key"), \
+                        mock.patch.object(jarvis, "OPENROUTER_API_KEY", "or-key"), \
+                        mock.patch.object(jarvis, "http_post",
+                                          side_effect=RuntimeError("HTTP 404: not found")) as post, \
+                        mock.patch.object(jarvis, "model_is_retired", return_value=retired), \
+                        mock.patch.object(jarvis.time, "sleep") as sleep, \
+                        mock.patch.object(jarvis, "log") as logger:
+                    with self.assertRaises(RuntimeError) as ctx:
+                        jarvis.ask_ai("prompt")
+                outcomes.append((post.call_args_list, sleep.call_args_list, str(ctx.exception)))
+                self.assertEqual(any("is retired" in call.args[0]
+                                     for call in logger.call_args_list), retired)
+        self.assertEqual(outcomes[0], outcomes[1])
+
+    def test_http_error_bodies_are_not_disclosed(self):
+        """Exercise real HTTPError handling with urlopen mocked, including the final crash text."""
+        sensitive = {"api_key": "fake-gemini-key", "token": "fake-provider-token",
+                     "user_id": "fake-user-id", "topic": "fake-topic"}
+        for code, message in ((404, "no longer available"), (500, "Internal Server Error")):
+            with self.subTest(code=code):
+                body = json.dumps({"error": {"message": message, **sensitive}}).encode("utf-8")
+
+                def fail_request(request, timeout):
+                    raise jarvis.urllib.error.HTTPError(
+                        request.full_url, code, "provider error", None, io.BytesIO(body))
+
+                with mock.patch.object(jarvis, "GEMINI_API_KEY", sensitive["api_key"]), \
+                        mock.patch.object(jarvis, "OPENROUTER_API_KEY", "or-key"), \
+                        mock.patch.object(jarvis.urllib.request, "urlopen", side_effect=fail_request) as urlopen, \
+                        mock.patch.object(jarvis.time, "sleep"), \
+                        mock.patch.object(jarvis, "log") as logger:
+                    with self.assertRaises(RuntimeError) as ctx:
+                        jarvis.ask_ai("prompt")
+                reported = str(ctx.exception) + "\n" + "\n".join(
+                    call.args[0] for call in logger.call_args_list)
+                self.assertEqual(urlopen.call_count, 1 + len(jarvis.OPENROUTER_MODELS))
+                self.assertIn(f"HTTP {code}", reported)
+                for value in sensitive.values():
+                    self.assertNotIn(value, reported)
+                self.assertTrue(ctx.exception.__suppress_context__)
+
+    def test_non_http_provider_error_bodies_are_not_disclosed(self):
+        """Even a 200 response with an error object must not leak its body via RuntimeError."""
+        sensitive = {"api_key": "fake-key", "token": "fake-token",
+                     "user_id": "fake-user", "topic": "fake-topic"}
+        reply = json.dumps({"error": {"message": "invalid response", **sensitive}})
+        with mock.patch.object(jarvis, "GEMINI_API_KEY", "g-key"), \
+                mock.patch.object(jarvis, "OPENROUTER_API_KEY", "or-key"), \
+                mock.patch.object(jarvis, "http_post", return_value=reply), \
+                mock.patch.object(jarvis.time, "sleep"), \
+                mock.patch.object(jarvis, "log") as logger:
+            with self.assertRaisesRegex(RuntimeError, "All AI providers failed") as ctx:
+                jarvis.ask_ai("prompt")
+        reported = str(ctx.exception) + "\n" + "\n".join(call.args[0] for call in logger.call_args_list)
+        for value in sensitive.values():
+            self.assertNotIn(value, reported)
 
 
 # ---------------------------------------------------------------------------
