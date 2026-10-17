@@ -1,0 +1,502 @@
+name: Jarvis
+
+# Runs the Jarvis coding agent every time a new issue is opened.
+# The issue body is the request. Jarvis writes code on a branch
+# named jarvis/<slug> and opens a pull request against main.
+#
+# The work is split into jobs so that AI-written code never runs in a
+# process tree that holds a secret:
+#   planN   - has the AI keys; asks the AI and stages the edited tree (no tests)
+#   testN   - NO secrets at all; runs the tests inside the staged tree
+#   publish - has GH_TOKEN only; re-checks the staged files, pushes, opens the PR
+#
+# Bounded repair loop: if test1 fails, plan2 shows the AI the failing output and
+# tries again on top of round 1; if test2 fails, plan3/test3 get one last try.
+# publish always runs once, on the last round that produced a stage, and is the
+# only job that notifies (so intermediate failures stay quiet).
+
+on:
+  issues:
+    types: [opened]
+
+# Nothing by default; each job declares exactly what it needs.
+permissions: {}
+
+concurrency:
+  group: jarvis-${{ github.event.issue.number }}
+  cancel-in-progress: false
+
+jobs:
+  # ===========================================================================
+  # ROUND 1
+  # ===========================================================================
+
+  # ---------------------------------------------------------------------------
+  # plan1: ask the AI and stage its files. Holds the AI keys, runs nothing AI-written.
+  # ---------------------------------------------------------------------------
+  plan1:
+    # Owner-only gate. The issue body is untrusted input that goes straight
+    # into an AI prompt, and this job holds API keys. Only run it for issues
+    # opened by the repository owner.
+    if: github.event.issue.user.login == github.repository_owner
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+
+    steps:
+      # persist-credentials: false keeps GITHUB_TOKEN out of .git/config, so
+      # nothing the AI writes can read the token from disk.
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Plan round 1 (ask the AI, apply files, stage the tree)
+        env:
+          JARVIS_STAGE: plan
+          JARVIS_ROUND: "1"
+          JARVIS_STAGE_DIR: ${{ runner.temp }}/jarvis-stage
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
+          JARVIS_REQUEST: ${{ github.event.issue.body }}
+          JARVIS_ISSUE: ${{ github.event.issue.number }}
+        run: python3 agent/jarvis_agent.py
+
+      # include-hidden-files is needed so dotfiles such as .gitignore or
+      # .github/ reach the test job. .git itself is never copied into the stage.
+      - name: Upload staged tree and plan.json
+        uses: actions/upload-artifact@v4
+        with:
+          name: jarvis-stage-1
+          path: ${{ runner.temp }}/jarvis-stage
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 7
+
+  # ---------------------------------------------------------------------------
+  # test1: run the tests. NO secrets, read-only token, nothing to steal.
+  # ---------------------------------------------------------------------------
+  test1:
+    needs: plan1
+    if: github.event.issue.user.login == github.repository_owner && needs.plan1.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+
+    steps:
+      # The test runner script comes from the trusted checkout, not from the
+      # artifact, so the AI cannot replace it. No credentials are persisted and
+      # no secret is passed to any step in this job.
+      - name: Check out repository (for agent/run_tests_stage.py only)
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Download staged tree
+        uses: actions/download-artifact@v4
+        with:
+          name: jarvis-stage-1
+          path: ${{ runner.temp }}/jarvis-stage
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # Dependency installs happen here, in the secret-free job.
+      - name: Install pytest (only if the staged tree has Python tests)
+        working-directory: ${{ runner.temp }}/jarvis-stage/tree
+        run: |
+          if [ -d tests ] || find . -path ./node_modules -prune -o \( -name 'test_*.py' -o -name '*_test.py' \) -print -quit | grep -q .; then
+            python3 -m pip install --quiet pytest
+          fi
+
+      # --ignore-scripts: neither the AI's package.json nor any dependency may
+      # run install hooks on this runner.
+      - name: Install npm dependencies without scripts (only if a lockfile exists)
+        working-directory: ${{ runner.temp }}/jarvis-stage/tree
+        run: |
+          if [ -f package-lock.json ]; then
+            npm ci --ignore-scripts --no-audit --no-fund || echo "::warning::npm ci failed; tests may fail"
+          fi
+
+      - name: Run tests in the staged tree
+        run: python3 agent/run_tests_stage.py "$RUNNER_TEMP/jarvis-stage/tree"
+
+      - name: Upload result.json
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: jarvis-test-result-1
+          path: ${{ runner.temp }}/jarvis-stage/result.json
+          if-no-files-found: warn
+
+  # ===========================================================================
+  # ROUND 2 - only if round 1's tests failed
+  # ===========================================================================
+
+  # ---------------------------------------------------------------------------
+  # plan2: show the AI round 1's failing output and let it repair on top of round 1.
+  # Same secrets as plan1. NTFY_TOPIC is included so that a *crash* of this job
+  # (bad AI reply, network error) reaches the phone immediately; normal test
+  # failures are still reported only once, by publish.
+  # ---------------------------------------------------------------------------
+  plan2:
+    needs: test1
+    # always() is required to run after a *failed* job; the result check keeps
+    # this round out when test1 passed, was cancelled, or was skipped.
+    if: always() && github.event.issue.user.login == github.repository_owner && needs.test1.result == 'failure'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+
+    steps:
+      # persist-credentials: false keeps GITHUB_TOKEN out of .git/config.
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Download round 1 stage (plan.json + tree)
+        uses: actions/download-artifact@v4
+        with:
+          name: jarvis-stage-1
+          path: ${{ runner.temp }}/jarvis-prev
+
+      # continue-on-error: if test1 died before writing result.json the agent
+      # still runs, with "(no result.json)" as the previous output.
+      - name: Download round 1 test result
+        uses: actions/download-artifact@v4
+        continue-on-error: true
+        with:
+          name: jarvis-test-result-1
+          path: ${{ runner.temp }}/jarvis-prev
+
+      - name: Plan round 2 (repair on top of round 1)
+        env:
+          JARVIS_STAGE: plan
+          JARVIS_ROUND: "2"
+          JARVIS_STAGE_DIR: ${{ runner.temp }}/jarvis-stage
+          JARVIS_PREV_DIR: ${{ runner.temp }}/jarvis-prev
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          # Only used by the crash handler (needs_human / concern / test failures
+          # are reported by publish). Never read by AI-written code: that runs in test2.
+          NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
+          JARVIS_REQUEST: ${{ github.event.issue.body }}
+          JARVIS_ISSUE: ${{ github.event.issue.number }}
+        run: python3 agent/jarvis_agent.py
+
+      - name: Upload staged tree and plan.json
+        uses: actions/upload-artifact@v4
+        with:
+          name: jarvis-stage-2
+          path: ${{ runner.temp }}/jarvis-stage
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 7
+
+  # ---------------------------------------------------------------------------
+  # test2: identical to test1, on the round 2 stage. NO secrets.
+  # ---------------------------------------------------------------------------
+  test2:
+    needs: plan2
+    if: github.event.issue.user.login == github.repository_owner && needs.plan2.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+
+    steps:
+      # Trusted runner script from the checkout; no credentials persisted; nothing secret here.
+      - name: Check out repository (for agent/run_tests_stage.py only)
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Download staged tree
+        uses: actions/download-artifact@v4
+        with:
+          name: jarvis-stage-2
+          path: ${{ runner.temp }}/jarvis-stage
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install pytest (only if the staged tree has Python tests)
+        working-directory: ${{ runner.temp }}/jarvis-stage/tree
+        run: |
+          if [ -d tests ] || find . -path ./node_modules -prune -o \( -name 'test_*.py' -o -name '*_test.py' \) -print -quit | grep -q .; then
+            python3 -m pip install --quiet pytest
+          fi
+
+      - name: Install npm dependencies without scripts (only if a lockfile exists)
+        working-directory: ${{ runner.temp }}/jarvis-stage/tree
+        run: |
+          if [ -f package-lock.json ]; then
+            npm ci --ignore-scripts --no-audit --no-fund || echo "::warning::npm ci failed; tests may fail"
+          fi
+
+      - name: Run tests in the staged tree
+        run: python3 agent/run_tests_stage.py "$RUNNER_TEMP/jarvis-stage/tree"
+
+      - name: Upload result.json
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: jarvis-test-result-2
+          path: ${{ runner.temp }}/jarvis-stage/result.json
+          if-no-files-found: warn
+
+  # ===========================================================================
+  # ROUND 3 - only if round 2's tests failed. Last try.
+  # ===========================================================================
+
+  # ---------------------------------------------------------------------------
+  # plan3: identical to plan2, built on round 2.
+  # ---------------------------------------------------------------------------
+  plan3:
+    needs: test2
+    if: always() && github.event.issue.user.login == github.repository_owner && needs.test2.result == 'failure'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Download round 2 stage (plan.json + tree)
+        uses: actions/download-artifact@v4
+        with:
+          name: jarvis-stage-2
+          path: ${{ runner.temp }}/jarvis-prev
+
+      - name: Download round 2 test result
+        uses: actions/download-artifact@v4
+        continue-on-error: true
+        with:
+          name: jarvis-test-result-2
+          path: ${{ runner.temp }}/jarvis-prev
+
+      - name: Plan round 3 (repair on top of round 2)
+        env:
+          JARVIS_STAGE: plan
+          JARVIS_ROUND: "3"
+          JARVIS_STAGE_DIR: ${{ runner.temp }}/jarvis-stage
+          JARVIS_PREV_DIR: ${{ runner.temp }}/jarvis-prev
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          # Only used by the crash handler (needs_human / concern / test failures
+          # are reported by publish). Never read by AI-written code: that runs in test3.
+          NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
+          JARVIS_REQUEST: ${{ github.event.issue.body }}
+          JARVIS_ISSUE: ${{ github.event.issue.number }}
+        run: python3 agent/jarvis_agent.py
+
+      - name: Upload staged tree and plan.json
+        uses: actions/upload-artifact@v4
+        with:
+          name: jarvis-stage-3
+          path: ${{ runner.temp }}/jarvis-stage
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 7
+
+  # ---------------------------------------------------------------------------
+  # test3: identical to test1, on the round 3 stage. NO secrets.
+  # ---------------------------------------------------------------------------
+  test3:
+    needs: plan3
+    if: github.event.issue.user.login == github.repository_owner && needs.plan3.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+
+    steps:
+      - name: Check out repository (for agent/run_tests_stage.py only)
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Download staged tree
+        uses: actions/download-artifact@v4
+        with:
+          name: jarvis-stage-3
+          path: ${{ runner.temp }}/jarvis-stage
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install pytest (only if the staged tree has Python tests)
+        working-directory: ${{ runner.temp }}/jarvis-stage/tree
+        run: |
+          if [ -d tests ] || find . -path ./node_modules -prune -o \( -name 'test_*.py' -o -name '*_test.py' \) -print -quit | grep -q .; then
+            python3 -m pip install --quiet pytest
+          fi
+
+      - name: Install npm dependencies without scripts (only if a lockfile exists)
+        working-directory: ${{ runner.temp }}/jarvis-stage/tree
+        run: |
+          if [ -f package-lock.json ]; then
+            npm ci --ignore-scripts --no-audit --no-fund || echo "::warning::npm ci failed; tests may fail"
+          fi
+
+      - name: Run tests in the staged tree
+        run: python3 agent/run_tests_stage.py "$RUNNER_TEMP/jarvis-stage/tree"
+
+      - name: Upload result.json
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: jarvis-test-result-3
+          path: ${{ runner.temp }}/jarvis-stage/result.json
+          if-no-files-found: warn
+
+  # ===========================================================================
+  # PUBLISH - once, on the last round that produced a stage
+  # ===========================================================================
+
+  # ---------------------------------------------------------------------------
+  # publish: holds GH_TOKEN, runs NO AI-written code, re-checks every file.
+  # ---------------------------------------------------------------------------
+  publish:
+    needs: [plan1, test1, plan2, test2, plan3, test3]
+    # always() so skipped/failed rounds do not skip publishing; never run if
+    # plan1 itself failed (there is nothing to publish). Owner gate as above.
+    if: always() && github.event.issue.user.login == github.repository_owner && needs.plan1.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+
+    steps:
+      # Which round gets published: the highest N whose planN result is exactly
+      # "success" (that is the only outcome that uploaded jarvis-stage-N).
+      # "skipped", "failure", "cancelled" and "" never count. The matching
+      # testN result travels with it so the agent can cross-check result.json.
+      - name: Pick the last round that ran
+        id: round
+        env:
+          PLAN1: ${{ needs.plan1.result }}
+          PLAN2: ${{ needs.plan2.result }}
+          PLAN3: ${{ needs.plan3.result }}
+          TEST1: ${{ needs.test1.result }}
+          TEST2: ${{ needs.test2.result }}
+          TEST3: ${{ needs.test3.result }}
+        run: |
+          set -u
+          echo "plan1=$PLAN1 test1=$TEST1 plan2=$PLAN2 test2=$TEST2 plan3=$PLAN3 test3=$TEST3"
+          if [ "$PLAN1" != "success" ]; then
+            echo "::error::plan1 result is '$PLAN1', not 'success'; nothing to publish"
+            exit 1
+          fi
+          round=1; test_result="$TEST1"; next_plan_result="$PLAN2"
+          if [ "$PLAN2" = "success" ]; then
+            round=2; test_result="$TEST2"; next_plan_result="$PLAN3"
+          fi
+          if [ "$PLAN3" = "success" ]; then
+            round=3; test_result="$TEST3"; next_plan_result=""
+          fi
+          echo "round=$round" >> "$GITHUB_OUTPUT"
+          echo "test_result=$test_result" >> "$GITHUB_OUTPUT"
+          echo "next_plan_result=$next_plan_result" >> "$GITHUB_OUTPUT"
+          echo "Publishing round $round (test job result: $test_result; next plan job: ${next_plan_result:-none})"
+
+      # persist-credentials: false keeps GITHUB_TOKEN out of .git/config.
+      # Pushes are authenticated through gh instead (next step).
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      # Tell git to ask gh for credentials. gh reads GH_TOKEN from the
+      # environment at push time, so the token is never written to disk;
+      # only a "credential.helper = gh auth git-credential" line is stored.
+      - name: Route git credentials through gh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh auth setup-git
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Configure git identity
+        run: |
+          git config user.name "Jarvis"
+          git config user.email "jarvis@users.noreply.github.com"
+
+      - name: Download the chosen round's stage (plan.json + tree)
+        uses: actions/download-artifact@v4
+        with:
+          name: jarvis-stage-${{ steps.round.outputs.round }}
+          path: ${{ runner.temp }}/jarvis-stage
+
+      # continue-on-error: if the test job was cancelled before uploading,
+      # publish still runs and reports the missing result instead of vanishing.
+      - name: Download the chosen round's result.json
+        uses: actions/download-artifact@v4
+        continue-on-error: true
+        with:
+          name: jarvis-test-result-${{ steps.round.outputs.round }}
+          path: ${{ runner.temp }}/jarvis-stage
+
+      # JARVIS_DRY_RUN comes from a repository *variable* (not a secret):
+      # Settings -> Secrets and variables -> Actions -> Variables. Publish goes
+      # live ONLY when it is exactly "0"; an unset variable now means dry run.
+      - name: Publish (re-check files, push jarvis/* branch, open PR)
+        env:
+          JARVIS_STAGE: publish
+          JARVIS_ROUND: ${{ steps.round.outputs.round }}
+          JARVIS_STAGE_DIR: ${{ runner.temp }}/jarvis-stage
+          # Unset / empty / anything but "0" = dry run (summary only, nothing pushed).
+          JARVIS_DRY_RUN: ${{ vars.JARVIS_DRY_RUN }}
+          # The test job's own outcome, from GitHub rather than from the artifact,
+          # so a forged result.json cannot turn a failed job into a passing PR.
+          TEST_JOB_RESULT: ${{ steps.round.outputs.test_result }}
+          # Result of the plan job for the NEXT round ("" after round 3): if it is not
+          # "success", nothing fixed this round's failure, so publish must notify.
+          NEXT_PLAN_RESULT: ${{ steps.round.outputs.next_plan_result }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
+          JARVIS_REQUEST: ${{ github.event.issue.body }}
+          JARVIS_ISSUE: ${{ github.event.issue.number }}
+        run: python3 agent/jarvis_agent.py
